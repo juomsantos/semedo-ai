@@ -77,6 +77,12 @@ async function updateDashboard() {
         if (document.getElementById('tab-agents').classList.contains('active')) {
             await updateAgentStats();
         }
+
+        // Update logs if visible
+        if (document.getElementById('tab-logs').classList.contains('active')) {
+            const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
+            await updateLogs(selectedAgent);
+        }
         
         // Update timestamp
         lastUpdate = new Date();
@@ -484,6 +490,9 @@ function switchTab(tabName) {
         updateAgentStats();
     } else if (tabName === 'approvals') {
         updateApprovals();
+    } else if (tabName === 'logs') {
+        const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
+        updateLogs(selectedAgent);
     }
 }
 
