@@ -138,6 +138,17 @@ body {
     border-bottom-color: #0066cc;
 }
 
+.badge {
+    display: inline-block;
+    background: #fa709a;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 6px;
+}
+
 /* Tab Content */
 .tab-content {
     display: none;
@@ -540,6 +551,83 @@ body {
     font-family: "Courier New", monospace;
 }
 
+/* Buttons */
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.btn-small {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.btn-success {
+    background: #4facfe;
+    color: white;
+}
+
+.btn-success:hover {
+    background: #0080ff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(79, 172, 254, 0.3);
+}
+
+.btn-danger {
+    background: #fa709a;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #f55a7a;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(250, 112, 154, 0.3);
+}
+
+.task-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.task-item.approval .task-body {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.task-body {
+    margin-top: 8px;
+}
+
+.task-body pre {
+    background: #f8f9fa;
+    padding: 8px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 12px;
+    font-family: "Courier New", monospace;
+    max-height: 200px;
+    word-break: break-word;
+}
+
+.detail-actions {
+    display: flex;
+    gap: 12px;
+    padding-top: 20px;
+    border-top: 1px solid #ddd;
+    margin-top: 20px;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .header {
@@ -564,5 +652,13 @@ body {
         flex-direction: column;
         gap: 12px;
         align-items: flex-start;
+    }
+
+    .task-actions {
+        flex-direction: column;
+    }
+
+    .btn {
+        width: 100%;
     }
 }

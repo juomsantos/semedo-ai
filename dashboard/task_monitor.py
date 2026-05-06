@@ -437,24 +437,24 @@ class TaskMonitor:
         pending_file = self.claude_code_pending / f"{task_id}.task.md"
         if not pending_file.exists():
             return False
-        
+
         try:
             content = pending_file.read_text(encoding="utf-8")
-            
+
             # Split frontmatter from body
             if not content.startswith("---"):
                 return False
-            
+
             parts = content.split("---", 2)
             if len(parts) < 3:
                 return False
-            
+
             frontmatter = parts[1].strip()
             body = parts[2].strip()
-            
+
             # Parse frontmatter
             metadata = self._parse_yaml_frontmatter(frontmatter)
-            
+
             # Update status in frontmatter
             lines = frontmatter.split("\n")
             new_lines = []
@@ -463,26 +463,41 @@ class TaskMonitor:
                     new_lines.append("status: rejected")
                 else:
                     new_lines.append(line)
-            
+
             new_frontmatter = "\n".join(new_lines)
-            
+
             # Append rejection block
             rejection_block = f"\n\n## Rejection\n{reason}"
             new_body = f"{body}{rejection_block}"
-            
+
             new_content = f"{new_frontmatter}\n---\n{new_body}"
-            
+
             # Create failed directory if needed
             failed = self.failed
             failed.mkdir(parents=True, exist_ok=True)
-            
+
             # Write to failed
             failed_file = failed / f"{task_id}.task.md"
             failed_file.write_text(new_content, encoding="utf-8")
-            
+
             # Remove from pending
             pending_file.unlink()
-            
+
             return True
         except Exception:
             return False
+
+    def get_agent_logs(self, agent: str, lines: int = 50) -> List[str]:
+        """Get recent log lines for a specific agent."""
+        log_file = self.logs_dir / agent / "general.log"
+
+        if not log_file.exists():
+            return []
+
+        try:
+            content = log_file.read_text(encoding="utf-8", errors="ignore")
+            all_lines = content.strip().split("\n")
+            # Return the last N lines
+            return all_lines[-lines:] if len(all_lines) > lines else all_lines
+        except Exception:
+            return []

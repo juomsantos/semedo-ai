@@ -343,24 +343,24 @@ async function updateLogs(agent) {
     try {
         const response = await fetch(`/api/agents/${agent}/logs?lines=50`);
         const data = await response.json();
-        
+
         const container = document.getElementById('logs-list');
-        
-        if (data.logs.length === 0) {
-            container.innerHTML = '<p class="no-data">No logs available</p>';
+
+        if (!data.logs || data.logs.length === 0) {
+            container.innerHTML = '<p class="no-data">No logs available for ' + agent + '</p>';
             return;
         }
-        
+
         container.innerHTML = data.logs.map(log => `
-            <div class="log-entry">
-                <span class="log-timestamp">${log}</span>
-            </div>
+            <div class="log-entry">${escapeHtml(log)}</div>
         `).join('');
-        
+
         // Auto-scroll to bottom
         container.parentElement.scrollTop = container.parentElement.scrollHeight;
     } catch (error) {
         console.error('Error updating logs:', error);
+        const container = document.getElementById('logs-list');
+        container.innerHTML = '<p class="no-data">Error loading logs: ' + error.message + '</p>';
     }
 }
 
