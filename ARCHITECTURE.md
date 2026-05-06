@@ -49,13 +49,15 @@ outbox/       failed/
 ```
 AI Team/
   ARCHITECTURE.md          ← this file
-  CLAUDE.md                ← project instructions for Claude Code
+  CLAUDE.md                ← project instructions for Claude (Cowork)
   IMPLEMENTATION_COMPLETE.md
-  QA_AGENT_BRIEFING.md
+  DASHBOARD.md             ← dashboard usage and REST API reference
+  config.json              ← centralized config (Ollama URL, models, dashboard port)
   inbox/                   ← drop task files here to start work
   processing/              ← tasks currently being handled (+ orchestrator.lock)
   outbox/                  ← completed results (task files + result files)
   failed/                  ← tasks that errored (with QA failure reports)
+  context/                 ← optional shared context files for tasks
   agents/
     orchestrator/
       system_prompt.md     ← routing & decomposition instructions
@@ -70,19 +72,28 @@ AI Team/
     qa/
       inbox/
       system_prompt.md
+  dashboard/               ← real-time web monitoring UI (Flask)
+    app.py                 ← REST API server
+    run_dashboard.py       ← launcher (reads config.json)
+    task_monitor.py        ← filesystem scanner
+    templates/index.html   ← dashboard UI
+    static/dashboard.js    ← frontend polling logic
+    static/dashboard.css   ← styling
+    README.md              ← dashboard-specific docs
   logs/                    ← per-agent execution traces
   scripts/                 ← agent Python scripts
     shared/
       task_io.py           ← task file read/write/move helpers
       ollama_client.py     ← Ollama REST wrapper
       logger.py            ← file + stdout logging
+      config.py            ← config.json loader (ProjectConfig class)
     agent_orchestrator.py
     agent_coder.py
     agent_research.py
     agent_claude_code.py
     agent_qa.py
     scheduler.py           ← background polling scheduler
-  RUN_SCHEDULER.bat        ← Windows quick-start
+  RUN_SCHEDULER.bat        ← Windows quick-start (agents only)
 ```
 
 ## Task File Format
@@ -160,6 +171,45 @@ The orchestrator uses a lockfile (`processing/orchestrator.lock`) to prevent con
 ## IDE Agents (Passive)
 
 **Copilot** and **Continue.dev** consume the shared folder as context. Not active polling workers.
+
+## Dashboard
+
+A separate Flask process reads directly from the shared filesystem (no DB). Exposes a REST API and a polled browser UI.
+
+```bash
+python dashboard/run_dashboard.py       # http://localhost:5000
+python dashboard/run_dashboard.py --port 8000 --debug
+```
+
+REST endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/status` | System metrics (pending/processing/completed/failed counts, agent stats) |
+| `GET /api/tasks` | All tasks; optional `?status=` and `?type=` filters |
+| `GET /api/tasks/<id>` | Full task detail with logs and result preview |
+| `GET /api/agents` | Per-agent completion and error counts |
+| `GET /api/agents/<name>/logs` | Last N log lines for an agent |
+
+Port and poll interval configured in `config.json` under `dashboard`. See `DASHBOARD.md` for full API docs and troubleshooting.
+
+## Configuration
+
+All runtime settings live in `config.json` at the project root. Loaded via `scripts/shared/config.py` (`ProjectConfig` class):
+
+```json
+{
+  "ollama": { "base_url": "http://192.168.1.13:11434", "timeout": 120 },
+  "agents": {
+    "orchestrator": { "model": "qwen3.5:9b" },
+    "coder": { "model": "qwen2.5-coder:7b" },
+    "research": { "model": "qwen3.5:9b" },
+    "qa": { "model": "qwen3.5:9b" },
+    "claude-code": { "cli": true, "timeout": 300 }
+  },
+  "dashboard": { "port": 5000, "debug": false, "poll_interval": 1500 }
+}
+```
 
 ## Diagrams
 

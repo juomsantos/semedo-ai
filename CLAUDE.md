@@ -1,6 +1,6 @@
 # AI Team — Agent Coordination System
 
-This project is a fully implemented multi-agent AI coordination system. Agents communicate through a shared filesystem, polled on a schedule via `scripts/scheduler.py`. See `ARCHITECTURE.md` for the full design and `IMPLEMENTATION_COMPLETE.md` for a summary of what was built.
+This project is a fully implemented multi-agent AI coordination system. Agents communicate through a shared filesystem, polled on a schedule via `scripts/scheduler.py`. A real-time web dashboard is available at `http://localhost:5000`. See `ARCHITECTURE.md` for the full design, `IMPLEMENTATION_COMPLETE.md` for a summary of what was built, and `DASHBOARD.md` for dashboard usage.
 
 ## Current Status: Fully Implemented ✓
 
@@ -18,6 +18,8 @@ A three-tier multi-agent system:
    - `claude CLI` (claude-code) — complex/reasoning tasks, polls every 3 min
    - `qwen3.5:9b` (qa) — code review + execution testing, polls every 2 min
 
+4. **Dashboard** (`Flask`) — real-time web UI at `http://localhost:5000`; polls agents, inbox, outbox, logs every 1.5s; start with `python dashboard/run_dashboard.py`
+
 ## Key Technical Decisions
 
 - **Ollama REST API** at `http://192.168.1.13:11434/api/chat`, `stream: false`
@@ -27,6 +29,8 @@ A three-tier multi-agent system:
 - **QA loop:** code tasks chain automatically through QA after the coder; one auto-retry on failure, failure report to `failed/` on second failure
 - **Concurrency guard:** orchestrator uses a lockfile (`processing/orchestrator.lock`) with PID validation so concurrent cron/scheduler invocations don't double-process
 - **Scheduler** is a Python threading-based loop (`scripts/scheduler.py`), not cron — works on Windows
+- **Config** centralized in `config.json` (Ollama URL, agent models, dashboard port); loaded via `scripts/shared/config.py`
+- **Dashboard** is a separate Flask process (`dashboard/app.py`); reads directly from the shared filesystem — no DB required
 
 ## Folder Structure
 
@@ -35,9 +39,11 @@ AI Team/
   CLAUDE.md                    ← you are here
   ARCHITECTURE.md              ← full design doc
   IMPLEMENTATION_COMPLETE.md   ← what was built and how
+  DASHBOARD.md                 ← dashboard usage and API reference
   ai-team-architecture.drawio  ← system topology diagram
   ai-team-message-flows.drawio ← message flow / QA loop diagram
-  RUN_SCHEDULER.bat            ← Windows quick-start
+  config.json                  ← centralized config (Ollama URL, models, dashboard port)
+  RUN_SCHEDULER.bat            ← Windows quick-start (agents only)
   requirements.txt
   inbox/                       ← drop .task.md files here to submit work
   processing/                  ← tasks in flight (+ orchestrator.lock)
@@ -57,12 +63,21 @@ AI Team/
     qa/
       inbox/
       system_prompt.md
+  dashboard/                   ← real-time web monitoring UI
+    app.py                     ← Flask REST API server
+    run_dashboard.py           ← launcher (reads config.json)
+    task_monitor.py            ← filesystem scanner
+    templates/index.html       ← dashboard UI
+    static/dashboard.js        ← frontend polling logic
+    static/dashboard.css       ← styling
+    README.md                  ← dashboard-specific docs
   logs/                        ← per-agent logs at logs/<agent>/general.log
   scripts/
     shared/
       task_io.py               ← task file I/O helpers
       ollama_client.py         ← Ollama REST wrapper
       logger.py                ← UTF-8-safe logger
+      config.py                ← config.json loader (ProjectConfig class)
     agent_orchestrator.py
     agent_coder.py
     agent_research.py
@@ -73,17 +88,24 @@ AI Team/
 
 ## Running the System
 
-**Windows (batch file):**
+**Terminal 1 — Agents (Windows batch file):**
 ```
 RUN_SCHEDULER.bat
 ```
 
-**Manual:**
+Or manually:
 ```bash
 python scripts/scheduler.py
 ```
 
 All 5 agents start on their intervals. Logs: `logs/scheduler/general.log` and `logs/<agent>/general.log`. Press Ctrl+C to stop.
+
+**Terminal 2 — Dashboard (optional, run independently):**
+```bash
+python dashboard/run_dashboard.py
+```
+
+Open `http://localhost:5000` in your browser. Port and other settings are in `config.json` under `dashboard`. The dashboard can run independently of the scheduler.
 
 ## Submitting a Task
 
@@ -113,6 +135,7 @@ The orchestrator picks it up within 1 minute and routes it to the right worker.
 
 ## Monitoring
 
+- **Dashboard:** `http://localhost:5000` — real-time task status, agent stats, live logs (start with `python dashboard/run_dashboard.py`)
 - Results land in `outbox/`
 - QA failures (with execution output + feedback) land in `failed/`
 - Logs: `logs/<agent>/general.log`
@@ -123,7 +146,6 @@ The system is complete and working. Potential extensions:
 
 1. **Task dependencies** — parent-child task tracking for multi-step workflows
 2. **Result aggregation** — summarize outputs from multiple agents
-3. **Web dashboard** — real-time monitoring UI over the shared folder
-4. **Webhooks** — notify when tasks complete
-5. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
-6. **RAG** — use embedding + rerank models for context-aware task routing
+3. **Webhooks** — notify when tasks complete
+4. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
+5. **RAG** — use embedding + rerank models for context-aware task routing
