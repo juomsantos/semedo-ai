@@ -1,0 +1,24 @@
+{
+  "ollama": {
+    "base_url": "http://192.168.1.13:11434",
+    "timeout": 120
+  },
+  "agents": {
+    "orchestrator": {
+      "model": "qwen3.5:9b"
+    },
+    "coder": {
+      "model": "qwen2.5-coder:7b"
+    },
+    "research": {
+      "model": "qwen3.5:9b"
+    },
+    "qa": {
+      "model": "qwen3.5:9b"
+    },
+    "claude-code": {
+      "cli": true,
+      "timeout": 300
+    }
+  }
+}

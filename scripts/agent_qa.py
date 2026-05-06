@@ -33,9 +33,11 @@ from shared.task_io import (
 )
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.logger import AgentLogger
+from shared.config import load_config
 
 AGENT_NAME = "qa"
-MODEL = "qwen3.5:9b"
+_config = load_config()
+MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "qa" / "inbox"
 SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "qa" / "system_prompt.md"
 

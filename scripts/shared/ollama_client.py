@@ -12,15 +12,24 @@ Usage:
     )
     print(response)  # plain string
 
-Ollama must be running at http://localhost:11434.
+Ollama configuration (base_url, timeout) is loaded from config.json.
 """
 
 import requests
 import json
 from typing import Optional
+from pathlib import Path
 
-OLLAMA_BASE_URL = "http://192.168.1.13:11434"
-DEFAULT_TIMEOUT = 120  # seconds — local models can be slow on large prompts
+# Try to load from config, fall back to defaults
+try:
+    from shared.config import load_config
+    _config = load_config()
+    OLLAMA_BASE_URL = _config.ollama_base_url()
+    DEFAULT_TIMEOUT = _config.ollama_timeout()
+except Exception:
+    # Fallback defaults if config loading fails
+    OLLAMA_BASE_URL = "http://192.168.1.13:11434"
+    DEFAULT_TIMEOUT = 120  # seconds — local models can be slow on large prompts
 
 
 class OllamaError(Exception):

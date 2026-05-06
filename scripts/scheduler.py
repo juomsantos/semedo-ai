@@ -20,6 +20,7 @@ from threading import Thread, Event
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from shared.logger import AgentLogger
+from shared.ollama_client import OllamaClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
@@ -40,6 +41,27 @@ class AgentScheduler:
         self.stop_event = Event()
         self.next_run_times = {}
         self._init_schedules()
+
+    def _check_ollama_availability(self) -> bool:
+        """Check if Ollama server is reachable. Log and print results."""
+        client = OllamaClient()
+        try:
+            is_available = client.is_available()
+            if is_available:
+                msg = f"✓ Ollama server is available at {client.base_url}"
+                self.log.info(msg)
+                print(msg)
+                return True
+            else:
+                msg = f"✗ Ollama server is not responding at {client.base_url}"
+                self.log.error(msg)
+                print(msg)
+                return False
+        except Exception as e:
+            msg = f"✗ Failed to reach Ollama server at {client.base_url}: {e}"
+            self.log.error(msg)
+            print(msg)
+            return False
 
     def _init_schedules(self):
         """Initialize next run times for all agents."""
@@ -96,6 +118,18 @@ class AgentScheduler:
 
     def run(self):
         """Start the scheduler and block until interrupted."""
+        # Check Ollama availability before starting scheduler
+        print("\n" + "="*60)
+        print("AI Team Scheduler — Initializing")
+        print("="*60)
+        
+        if not self._check_ollama_availability():
+            msg = "\n⚠ WARNING: Scheduler starting without Ollama connection.\n  Agents will fail until Ollama is available.\n"
+            self.log.warning(msg)
+            print(msg)
+        else:
+            print()  # Newline after success message
+        
         try:
             self._schedule_agents()
         except KeyboardInterrupt:

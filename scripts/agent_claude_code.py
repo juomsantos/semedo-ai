@@ -33,10 +33,12 @@ from shared.task_io import (
     PROJECT_ROOT,
 )
 from shared.logger import AgentLogger
+from shared.config import load_config
 
 AGENT_NAME = "claude-code"
+_config = load_config()
+CLAUDE_TIMEOUT = _config.agent_timeout(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "claude-code" / "inbox"
-CLAUDE_TIMEOUT = 300  # seconds — Claude Code can take time on complex tasks
 
 
 def invoke_claude_code(task_body: str, log: AgentLogger) -> str:
