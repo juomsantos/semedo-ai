@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mv processing/example.task.md inbox/)",
+      "Bash(python scripts/agent_orchestrator.py)"
+    ]
+  }
+}

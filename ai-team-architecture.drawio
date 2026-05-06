@@ -1,0 +1,147 @@
+<mxfile>
+  <diagram name="System Architecture" id="arch">
+    <mxGraphModel adaptiveColors="auto">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="joao" value="&lt;b&gt;João / Claude Cowork&lt;/b&gt;&lt;br&gt;Master Coordinator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="320" y="40" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="inbox" value="inbox/" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="370" y="150" width="100" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="orch" value="&lt;b&gt;Orchestrator&lt;/b&gt;&lt;br&gt;qwen3.5:9b" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="320" y="280" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sched" value="&lt;b&gt;Scheduler&lt;/b&gt;&lt;br&gt;scheduler.py&lt;br&gt;(Python threads)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="270" width="140" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="coder_inbox" value="coder/inbox/" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="420" width="100" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="res_inbox" value="research/inbox/" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="355" y="420" width="110" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="cc_inbox" value="claude-code/inbox/" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="590" y="420" width="120" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="coder" value="&lt;b&gt;Coder Agent&lt;/b&gt;&lt;br&gt;qwen2.5-coder:7b&lt;br&gt;polls 2min" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="60" y="550" width="160" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="research" value="&lt;b&gt;Research Agent&lt;/b&gt;&lt;br&gt;qwen3.5:9b&lt;br&gt;polls 2min" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="330" y="550" width="160" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="cc" value="&lt;b&gt;Claude Code Agent&lt;/b&gt;&lt;br&gt;claude CLI&lt;br&gt;polls 3min" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="570" y="550" width="160" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="qa_inbox" value="qa/inbox/" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="90" y="690" width="100" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="qa" value="&lt;b&gt;QA Agent&lt;/b&gt;&lt;br&gt;qwen3.5:9b&lt;br&gt;execute + review, polls 2min" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="60" y="820" width="180" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="outbox" value="outbox/" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="350" y="830" width="100" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="failed" value="failed/" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="570" y="830" width="100" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_joao_inbox" value="writes .task.md" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="joao" target="inbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_inbox_orch" value="polls 1min" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="inbox" target="orch" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_sched_orch" value="triggers" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;" edge="1" source="sched" target="orch" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_sched_coder" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;" edge="1" source="sched" target="coder" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_sched_res" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;" edge="1" source="sched" target="research" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_sched_cc" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;" edge="1" source="sched" target="cc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_sched_qa" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;" edge="1" source="sched" target="qa" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_orch_coder" value="code tasks" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="orch" target="coder_inbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_orch_res" value="research tasks" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="orch" target="res_inbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_orch_cc" value="complex tasks" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="orch" target="cc_inbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_cinbox_coder" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="coder_inbox" target="coder" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_rinbox_res" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="res_inbox" target="research" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_ccinbox_cc" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="cc_inbox" target="cc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_coder_qa" value="chain_to: qa" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="coder" target="qa_inbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_qainbox_qa" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="qa_inbox" target="qa" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_qa_pass" value="PASS" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#82b366;fontColor=#82b366;fontStyle=1;" edge="1" source="qa" target="outbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_qa_fail" value="FAIL (exhausted)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;fontColor=#b85450;fontStyle=1;" edge="1" source="qa" target="failed" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_qa_retry" value="FAIL (retry, retry_count=0)" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#d6b656;fontColor=#d6b656;" edge="1" source="qa" target="coder_inbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_res_out" value="result" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="research" target="outbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_cc_out" value="result" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="cc" target="outbox" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
