@@ -30,3 +30,6 @@ Thumbs.db
 
 # Test files
 test_setup.py
+
+# Claude session files
+.claude/worktrees/
