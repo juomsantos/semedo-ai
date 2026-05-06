@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Team Dashboard</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+    <header class="header">
+        <h1>🤖 AI Team Dashboard</h1>
+        <div class="header-meta">
+            <span id="last-update">Last updated: -</span>
+            <span id="poll-status" class="poll-status">● Polling...</span>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- System Status Panel -->
+        <section class="metrics-panel">
+            <h2>System Status</h2>
+            <div class="metrics-grid">
+                <div class="metric pending">
+                    <div class="metric-value" id="metric-pending">0</div>
+                    <div class="metric-label">Pending</div>
+                </div>
+                <div class="metric processing">
+                    <div class="metric-value" id="metric-processing">0</div>
+                    <div class="metric-label">Processing</div>
+                </div>
+                <div class="metric completed">
+                    <div class="metric-value" id="metric-completed">0</div>
+                    <div class="metric-label">Completed</div>
+                </div>
+                <div class="metric failed">
+                    <div class="metric-value" id="metric-failed">0</div>
+                    <div class="metric-label">Failed</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="active">Active Tasks</button>
+            <button class="tab-btn" data-tab="history">History</button>
+            <button class="tab-btn" data-tab="agents">Agent Stats</button>
+            <button class="tab-btn" data-tab="logs">Logs</button>
+        </nav>
+
+        <!-- Active Tasks Tab -->
+        <section id="tab-active" class="tab-content active">
+            <div class="section-header">
+                <h3>Currently Processing</h3>
+                <span class="task-count" id="active-count">0 tasks</span>
+            </div>
+            <div id="active-tasks" class="tasks-list">
+                <p class="no-data">No tasks processing</p>
+            </div>
+        </section>
+
+        <!-- History Tab -->
+        <section id="tab-history" class="tab-content">
+            <div class="section-header">
+                <h3>Task History</h3>
+                <div class="filters">
+                    <select id="history-filter" class="filter-select">
+                        <option value="">All Statuses</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                </div>
+            </div>
+            <div id="history-tasks" class="tasks-list">
+                <p class="no-data">No tasks</p>
+            </div>
+        </section>
+
+        <!-- Agent Stats Tab -->
+        <section id="tab-agents" class="tab-content">
+            <h3>Agent Statistics</h3>
+            <div id="agent-stats" class="agent-stats">
+                <p class="no-data">Loading...</p>
+            </div>
+        </section>
+
+        <!-- Logs Tab -->
+        <section id="tab-logs" class="tab-content">
+            <div class="section-header">
+                <h3>Agent Logs</h3>
+                <select id="log-agent-select" class="filter-select">
+                    <option value="orchestrator">Orchestrator</option>
+                    <option value="coder">Coder</option>
+                    <option value="research">Research</option>
+                    <option value="qa">QA</option>
+                    <option value="claude-code">Claude Code</option>
+                    <option value="scheduler">Scheduler</option>
+                </select>
+            </div>
+            <div id="logs-container" class="logs-container">
+                <div id="logs-list" class="logs-list">
+                    <p class="no-data">No logs</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Task Detail Modal -->
+    <div id="task-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Task Details</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div id="modal-body" class="modal-body">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

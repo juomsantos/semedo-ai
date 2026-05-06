@@ -20,5 +20,10 @@
       "cli": true,
       "timeout": 300
     }
+  },
+  "dashboard": {
+    "port": 5000,
+    "debug": false,
+    "poll_interval": 1500
   }
 }
