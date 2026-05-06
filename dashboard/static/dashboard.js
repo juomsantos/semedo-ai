@@ -65,6 +65,9 @@ async function updateDashboard() {
         // Update active tasks (processing)
         await updateActiveTasks();
         
+        // Update approvals (always, for badge)
+        await updateApprovals();
+        
         // Update history if visible
         if (document.getElementById('tab-history').classList.contains('active')) {
             await updateHistoryTasks();
@@ -95,8 +98,164 @@ async function updateStatus() {
         document.getElementById('metric-processing').textContent = data.counts.processing;
         document.getElementById('metric-completed').textContent = data.counts.completed;
         document.getElementById('metric-failed').textContent = data.counts.failed;
+        document.getElementById('metric-approval').textContent = data.counts.awaiting_approval;
     } catch (error) {
         console.error('Error updating status:', error);
+    }
+}
+
+// Update approvals
+async function updateApprovals() {
+    try {
+        const response = await fetch('/api/pending-approvals');
+        const data = await response.json();
+        
+        const container = document.getElementById('approval-tasks');
+        const count = document.getElementById('approval-count');
+        const badge = document.getElementById('approval-badge');
+        
+        count.textContent = `${data.count} ${data.count === 1 ? 'task' : 'tasks'}`;
+        badge.textContent = data.count;
+        badge.style.display = data.count > 0 ? 'inline' : 'none';
+        
+        if (data.tasks.length === 0) {
+            container.innerHTML = '<p class="no-data">No tasks awaiting approval</p>';
+            return;
+        }
+        
+        container.innerHTML = data.tasks.map(task => createApprovalTaskElement(task)).join('');
+        
+        // Add click handlers
+        container.querySelectorAll('.task-item').forEach(el => {
+            el.addEventListener('click', () => showApprovalDetail(el.dataset.taskId));
+        });
+    } catch (error) {
+        console.error('Error updating approvals:', error);
+    }
+}
+
+// Create approval task element HTML
+function createApprovalTaskElement(task) {
+    const ageStr = formatAge(task.age_seconds);
+    
+    return `
+        <div class="task-item approval" data-task-id="${task.id}">
+            <div class="task-header">
+                <span class="task-id">${task.id}</span>
+                <span class="task-status approval">${task.status}</span>
+            </div>
+            <div class="task-meta">
+                <span class="task-type">${task.type}</span>
+                <span class="task-priority priority-${task.priority}">${task.priority}</span>
+                <span class="task-age">${ageStr}</span>
+            </div>
+            <div class="task-info">
+                <span class="task-creator">${task.created_by}</span>
+                <span class="task-assigned">→ ${task.assigned_to}</span>
+            </div>
+            <div class="task-actions">
+                <button class="btn btn-small btn-success" onclick="approveTask('${task.id}')">Approve</button>
+                <button class="btn btn-small btn-danger" onclick="rejectTask('${task.id}')">Reject</button>
+            </div>
+            <div class="task-body">
+                <pre>${escapeHtml(task.body)}</pre>
+            </div>
+        </div>
+    `;
+}
+
+// Show approval detail modal
+async function showApprovalDetail(taskId) {
+    try {
+        const response = await fetch(`/api/pending-approvals/${taskId}`);
+        const task = await response.json();
+        
+        const modal = document.getElementById('task-modal');
+        const title = document.getElementById('modal-title');
+        const body = document.getElementById('modal-body');
+        
+        title.textContent = `Task: ${task.id} (Awaiting Approval)`;
+        
+        let html = `
+            <div class="task-detail">
+                <div class="detail-section">
+                    <h4>Metadata</h4>
+                    <div class="detail-grid">
+                        <div><strong>Type:</strong> ${task.type}</div>
+                        <div><strong>Priority:</strong> ${task.priority}</div>
+                        <div><strong>Status:</strong> ${task.status}</div>
+                        <div><strong>Location:</strong> ${task.location}</div>
+                        <div><strong>Created by:</strong> ${task.created_by}</div>
+                        <div><strong>Assigned to:</strong> ${task.assigned_to}</div>
+                        <div><strong>Created at:</strong> ${task.created_at}</div>
+                        <div><strong>Age:</strong> ${formatAge(task.age_seconds)}</div>
+                    </div>
+                </div>
+                <div class="detail-section">
+                    <h4>Task Description</h4>
+                    <pre class="detail-result">${escapeHtml(task.body)}</pre>
+                </div>
+                <div class="detail-actions">
+                    <button class="btn btn-success" onclick="approveTask('${task.id}')">Approve Task</button>
+                    <button class="btn btn-danger" onclick="rejectTask('${task.id}')">Reject Task</button>
+                </div>
+            </div>
+        `;
+        
+        body.innerHTML = html;
+        modal.classList.add('show');
+    } catch (error) {
+        console.error('Error loading task detail:', error);
+    }
+}
+
+// Approve task
+async function approveTask(taskId) {
+    try {
+        const response = await fetch(`/api/pending-approvals/${taskId}/approve`, {
+            method: 'POST',
+        });
+        
+        if (response.ok) {
+            await updateApprovals();
+            updateStatus();
+            showNotification(`Task ${taskId} approved!`, 'success');
+        } else {
+            const data = await response.json();
+            showNotification(data.error || 'Failed to approve task', 'error');
+        }
+    } catch (error) {
+        console.error('Error approving task:', error);
+        showNotification('Error approving task', 'error');
+    }
+}
+
+// Reject task
+async function rejectTask(taskId) {
+    const reason = window.prompt('Reason for rejection (optional):', 'Rejected by user');
+    
+    if (reason === null) return; // User cancelled
+    
+    try {
+        const response = await fetch(`/api/pending-approvals/${taskId}/reject`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ reason: reason || 'Rejected by user' }),
+        });
+        
+        if (response.ok) {
+            await updateApprovals();
+            updateStatus();
+            showNotification(`Task ${taskId} rejected!`, 'success');
+        } else {
+            const data = await response.json();
+            showNotification(data.error || 'Failed to reject task', 'error');
+        }
+    } catch (error) {
+        console.error('Error rejecting task:', error);
+        showNotification('Error rejecting task', 'error');
     }
 }
 
@@ -323,6 +482,8 @@ function switchTab(tabName) {
         updateHistoryTasks();
     } else if (tabName === 'agents') {
         updateAgentStats();
+    } else if (tabName === 'approvals') {
+        updateApprovals();
     }
 }
 

@@ -1,14 +1,26 @@
 @echo off
-REM RUN_SCHEDULER.bat — Start the agent scheduler process
+REM RUN_SCHEDULER.bat — Start the AI Team agents (scheduler + dashboard)
 REM
-REM This batch file starts the Python scheduler in a new window.
-REM The scheduler will run indefinitely, invoking agents on their intervals.
-REM Close the window or press Ctrl+C to stop.
+REM This batch file starts both the dashboard and scheduler processes.
+REM The dashboard serves the web UI on http://localhost:5000
+REM The scheduler runs the agent cron jobs
+REM Close all windows or press Ctrl+C to stop.
 
 cd /d "%~dp0"
 
-echo Starting AI Team Agent Scheduler...
-echo Agents will poll at intervals: Orchestrator (1min), Coder (2min), Research (2min), ClaudeCode (3min)
+echo ========================================
+echo AI Team Agent System
+echo ========================================
+echo.
+
+echo Starting Dashboard on http://localhost:5000...
+echo.
+
+start cmd /k "python dashboard\run_dashboard.py"
+
+timeout /t 2 /nobreak >nul
+
+echo Starting Agent Scheduler...
 echo.
 echo Logs are written to: logs\scheduler\general.log
 echo.

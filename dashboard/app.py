@@ -103,6 +103,42 @@ def get_agent_logs(agent):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/pending-approvals")
+def get_pending_approvals():
+    """Get all tasks awaiting approval."""
+    try:
+        tasks = monitor.get_pending_approvals()
+        return jsonify({"tasks": tasks, "count": len(tasks)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/pending-approvals/<task_id>/approve", methods=["POST"])
+def approve_task(task_id):
+    """Approve a pending task."""
+    try:
+        success = monitor.approve_task(task_id)
+        if not success:
+            return jsonify({"error": f"Task {task_id} not found"}), 404
+        return jsonify({"status": "approved", "task_id": task_id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/pending-approvals/<task_id>/reject", methods=["POST"])
+def reject_task(task_id):
+    """Reject a pending task."""
+    try:
+        body = request.get_json() or {}
+        reason = body.get("reason", "Rejected by user")
+        success = monitor.reject_task(task_id, reason)
+        if not success:
+            return jsonify({"error": f"Task {task_id} not found"}), 404
+        return jsonify({"status": "rejected", "task_id": task_id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""
@@ -127,6 +163,9 @@ def main(port: int = 5000, debug: bool = False):
     print(f"  GET /api/tasks/<id>      - Task detail")
     print(f"  GET /api/agents          - Agent statistics")
     print(f"  GET /api/agents/<name>/logs - Agent logs")
+    print(f"  GET /api/pending-approvals - Tasks awaiting approval")
+    print(f"  POST /api/pending-approvals/<id>/approve - Approve task")
+    print(f"  POST /api/pending-approvals/<id>/reject - Reject task")
     print()
     
     app.run(host="0.0.0.0", port=port, debug=debug)

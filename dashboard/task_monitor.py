@@ -23,6 +23,7 @@ class TaskMonitor:
         self.failed = self.project_root / "failed"
         self.logs_dir = self.project_root / "logs"
         self.agents_dir = self.project_root / "agents"
+        self.claude_code_pending = self.agents_dir / "claude-code" / "pending"
 
     def get_system_status(self) -> Dict[str, Any]:
         """Get overall system status and metrics."""
@@ -33,10 +34,17 @@ class TaskMonitor:
                 "processing": self._count_processing_tasks(),
                 "completed": self._count_completed_tasks(),
                 "failed": self._count_failed_tasks(),
+                "awaiting_approval": self._count_pending_approvals(),
             },
             "ollama_lock": self._check_ollama_lock(),
             "agent_stats": self._get_agent_stats(),
         }
+
+    def _count_pending_approvals(self) -> int:
+        """Count tasks awaiting approval in the pending folder."""
+        if not self.claude_code_pending.exists():
+            return 0
+        return len([f for f in self.claude_code_pending.glob("*.task.md")])
 
     def _count_pending_tasks(self) -> int:
         """Count pending tasks in inbox and agent inboxes."""
@@ -125,6 +133,13 @@ class TaskMonitor:
                 if task:
                     tasks.append(task)
         
+        # Pending approval tasks
+        if self.claude_code_pending.exists():
+            for task_file in sorted(self.claude_code_pending.glob("*.task.md"), reverse=True)[:limit]:
+                task = self._parse_task_file(task_file, "pending_approval", "agents/claude-code/pending", assigned_to="pending_approval")
+                if task:
+                    tasks.append(task)
+        
         # Sort by creation time descending
         return sorted(tasks, key=lambda t: t.get("created_at", ""), reverse=True)[:limit]
 
@@ -141,6 +156,7 @@ class TaskMonitor:
             (self.processing, "processing"),
             (self.outbox, "completed"),
             (self.failed, "failed"),
+            (self.claude_code_pending, "pending_approval"),
         ]:
             if folder.exists():
                 found = folder / f"{task_id}.task.md"
@@ -321,16 +337,152 @@ class TaskMonitor:
         
         return sorted(logs, key=lambda x: x["timestamp"])
 
-    def get_agent_logs(self, agent: str, lines: int = 50) -> List[str]:
-        """Get recent log lines for an agent."""
-        log_file = self.logs_dir / agent / "general.log"
+    def get_pending_approvals(self) -> List[Dict[str, Any]]:
+        """Get all tasks awaiting approval with full body text."""
+        tasks = []
+        if not self.claude_code_pending.exists():
+            return tasks
         
-        if not log_file.exists():
-            return []
+        for task_file in sorted(self.claude_code_pending.glob("*.task.md"), reverse=True):
+            try:
+                content = task_file.read_text(encoding="utf-8")
+                
+                # Split frontmatter from body
+                if not content.startswith("---"):
+                    continue
+                
+                parts = content.split("---", 2)
+                if len(parts) < 3:
+                    continue
+                
+                frontmatter = parts[1].strip()
+                body = parts[2].strip()
+                
+                # Parse YAML frontmatter
+                metadata = self._parse_yaml_frontmatter(frontmatter)
+                
+                task_id = metadata.get("id", task_file.stem)
+                file_mtime = datetime.fromtimestamp(task_file.stat().st_mtime, tz=timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - file_mtime).total_seconds()
+                
+                tasks.append({
+                    "id": task_id,
+                    "type": metadata.get("type", "unknown"),
+                    "priority": metadata.get("priority", "medium"),
+                    "created_by": metadata.get("created_by", "unknown"),
+                    "created_at": metadata.get("created_at", ""),
+                    "assigned_to": "pending_approval",
+                    "status": "pending_approval",
+                    "location": "agents/claude-code/pending",
+                    "age_seconds": int(age_seconds),
+                    "body": body,
+                })
+            except Exception:
+                continue
+        
+        return tasks
+
+    def approve_task(self, task_id: str) -> bool:
+        """Move task from pending to inbox and update status."""
+        pending_file = self.claude_code_pending / f"{task_id}.task.md"
+        if not pending_file.exists():
+            return False
         
         try:
-            content = log_file.read_text(encoding="utf-8", errors="ignore")
-            log_lines = content.strip().split("\n")
-            return log_lines[-lines:]
+            content = pending_file.read_text(encoding="utf-8")
+            
+            # Split frontmatter from body
+            if not content.startswith("---"):
+                return False
+            
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                return False
+            
+            frontmatter = parts[1].strip()
+            body = parts[2].strip()
+            
+            # Parse frontmatter
+            metadata = self._parse_yaml_frontmatter(frontmatter)
+            
+            # Update status in frontmatter
+            lines = frontmatter.split("\n")
+            new_lines = []
+            for line in lines:
+                if line.startswith("status:"):
+                    new_lines.append("status: pending")
+                else:
+                    new_lines.append(line)
+            
+            new_frontmatter = "\n".join(new_lines)
+            new_content = f"{new_frontmatter}\n---\n{body}"
+            
+            # Create inbox directory if needed
+            inbox = self.agents_dir / "claude-code" / "inbox"
+            inbox.mkdir(parents=True, exist_ok=True)
+            
+            # Write to inbox
+            inbox_file = inbox / f"{task_id}.task.md"
+            inbox_file.write_text(new_content, encoding="utf-8")
+            
+            # Remove from pending
+            pending_file.unlink()
+            
+            return True
         except Exception:
-            return []
+            return False
+
+    def reject_task(self, task_id: str, reason: str) -> bool:
+        """Move task to failed with rejection reason appended."""
+        pending_file = self.claude_code_pending / f"{task_id}.task.md"
+        if not pending_file.exists():
+            return False
+        
+        try:
+            content = pending_file.read_text(encoding="utf-8")
+            
+            # Split frontmatter from body
+            if not content.startswith("---"):
+                return False
+            
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                return False
+            
+            frontmatter = parts[1].strip()
+            body = parts[2].strip()
+            
+            # Parse frontmatter
+            metadata = self._parse_yaml_frontmatter(frontmatter)
+            
+            # Update status in frontmatter
+            lines = frontmatter.split("\n")
+            new_lines = []
+            for line in lines:
+                if line.startswith("status:"):
+                    new_lines.append("status: rejected")
+                else:
+                    new_lines.append(line)
+            
+            new_frontmatter = "\n".join(new_lines)
+            
+            # Append rejection block
+            rejection_block = f"\n\n## Rejection\n{reason}"
+            new_body = f"{body}{rejection_block}"
+            
+            new_content = f"{new_frontmatter}\n---\n{new_body}"
+            
+            # Create failed directory if needed
+            failed = self.failed
+            failed.mkdir(parents=True, exist_ok=True)
+            
+            # Write to failed
+            failed_file = failed / f"{task_id}.task.md"
+            failed_file.write_text(new_content, encoding="utf-8")
+            
+            # Remove from pending
+            pending_file.unlink()
+            
+            return True
+        except Exception:
+            return False

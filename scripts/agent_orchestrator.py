@@ -100,6 +100,7 @@ WORKER_INBOXES = {
     "coder": PROJECT_ROOT / "agents" / "coder" / "inbox",
     "research": PROJECT_ROOT / "agents" / "research" / "inbox",
     "claude-code": PROJECT_ROOT / "agents" / "claude-code" / "inbox",
+    "pending_approval": PROJECT_ROOT / "agents" / "claude-code" / "pending",
 }
 
 
@@ -189,6 +190,23 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     for subtask in subtasks:
         worker = subtask["worker"]
+        
+        # Handle pending_approval routing target
+        if worker == "pending_approval":
+            pending_inbox = PROJECT_ROOT / "agents" / "claude-code" / "pending"
+            pending_inbox.mkdir(parents=True, exist_ok=True)
+            new_task_path = create_task_file(
+                inbox_path=pending_inbox,
+                task_type=subtask["type"],
+                description=subtask["description"],
+                expected_output=subtask["expected_output"],
+                assigned_to="pending_approval",
+                created_by=AGENT_NAME,
+                status="pending_approval",
+            )
+            log.info(f"Created pending task {new_task_path.name} → pending_approval")
+            continue
+        
         inbox = WORKER_INBOXES.get(worker)
         if not inbox:
             log.error(f"Unknown worker '{worker}' in routing decision — skipping subtask")
