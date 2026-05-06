@@ -90,6 +90,89 @@ class OllamaClient:
         except (KeyError, TypeError) as e:
             raise OllamaError(f"Unexpected Ollama response shape: {data}") from e
 
+    def chat_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float = 0.3,
+    ) -> dict:
+        """
+        Send a chat request with tool definitions using Ollama's tool-calling API.
+
+        Args:
+            model:       Ollama model name.
+            messages:    Full message history in OpenAI format:
+                           [{"role": "system"|"user"|"assistant"|"tool", "content": "..."}]
+                         For tool result messages use:
+                           {"role": "tool", "content": "<result string>"}
+            tools:       List of tool definitions in OpenAI function format:
+                           [{"type": "function", "function": {
+                               "name": "...", "description": "...",
+                               "parameters": {"type": "object", "properties": {...}, "required": [...]}
+                           }}]
+            temperature: Sampling temperature (default 0.3).
+
+        Returns:
+            A dict with one of two shapes:
+              - Final answer:  {"type": "text", "content": "<string>"}
+              - Tool call:     {"type": "tool_call", "name": "<tool_name>", "arguments": {<dict>}}
+
+        Raises:
+            OllamaError on network or API failure.
+        """
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+            },
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+        except requests.exceptions.ConnectionError:
+            raise OllamaError(
+                f"Cannot connect to Ollama at {self.base_url}. Is it running?"
+            )
+        except requests.exceptions.Timeout:
+            raise OllamaError(f"Ollama request timed out after {self.timeout}s.")
+        except requests.exceptions.HTTPError as e:
+            raise OllamaError(f"Ollama HTTP error: {e} — {resp.text}")
+
+        data = resp.json()
+
+        try:
+            message = data["message"]
+        except (KeyError, TypeError) as e:
+            raise OllamaError(f"Unexpected Ollama response shape: {data}") from e
+
+        # Model wants to call a tool
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            call = tool_calls[0]  # handle one call per turn
+            fn = call.get("function", {})
+            name = fn.get("name", "")
+            arguments = fn.get("arguments", {})
+            # arguments may arrive as a JSON string in some Ollama versions
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {"raw": arguments}
+            return {"type": "tool_call", "name": name, "arguments": arguments}
+
+        # Model returned a final text answer
+        content = message.get("content", "")
+        return {"type": "text", "content": content}
+
     def is_available(self) -> bool:
         """Return True if Ollama is reachable."""
         try:

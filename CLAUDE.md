@@ -14,7 +14,7 @@ A three-tier multi-agent system:
 2. **Orchestrator** (`qwen3.5:9b`) — polls `inbox/` every 1 min, routes and decomposes tasks into subtasks, writes to worker inboxes
 3. **Workers:**
    - `qwen2.5-coder:7b` (coder) — code generation, polls every 2 min
-   - `qwen3.5:9b` (research) — research, summarization, Q&A, polls every 2 min
+   - `qwen3.5:9b` (research) — research, summarization, Q&A, polls every 2 min; has live web search via DuckDuckGo (model decides when to search, up to 5 searches per task)
    - `claude CLI` (claude-code) — complex/reasoning tasks, polls every 3 min
    - `qwen3.5:9b` (qa) — code review + execution testing, polls every 2 min
 
@@ -22,7 +22,7 @@ A three-tier multi-agent system:
 
 ## Key Technical Decisions
 
-- **Ollama REST API** at `http://192.168.1.13:11434/api/chat`, `stream: false`
+- **Ollama REST API** at `http://192.168.1.13:11434/api/chat`, `stream: false`; research agent uses the tool-calling variant (`chat_with_tools`) for web search
 - **Claude Code worker:** `subprocess.run(["claude", "--print", "-p", task_content])`
 - **Task files** are `.task.md` with YAML frontmatter (see `ARCHITECTURE.md` for schema)
 - **System prompts** stored as files in `agents/<name>/system_prompt.md` — edit those to change agent behaviour without touching code
@@ -75,7 +75,8 @@ AI Team/
   scripts/
     shared/
       task_io.py               ← task file I/O helpers
-      ollama_client.py         ← Ollama REST wrapper
+      ollama_client.py         ← Ollama REST wrapper (chat + chat_with_tools)
+      web_search.py            ← DuckDuckGo search wrapper (used by research agent)
       logger.py                ← UTF-8-safe logger
       config.py                ← config.json loader (ProjectConfig class)
     agent_orchestrator.py
@@ -149,3 +150,4 @@ The system is complete and working. Potential extensions:
 3. **Webhooks** — notify when tasks complete
 4. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
 5. **RAG** — use embedding + rerank models for context-aware task routing
+6. **Web search for other agents** — extend `chat_with_tools()` loop to coder or QA if useful

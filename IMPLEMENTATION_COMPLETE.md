@@ -12,14 +12,15 @@ All agent scripts and the real-time web dashboard are implemented, tested end-to
 |---|---|---|---|
 | Orchestrator | `agent_orchestrator.py` | qwen3.5:9b | Routes & decomposes tasks |
 | Coder | `agent_coder.py` | qwen2.5-coder:7b | Code generation |
-| Research | `agent_research.py` | qwen3.5:9b | Research, summarization |
+| Research | `agent_research.py` | qwen3.5:9b | Research, summarization — with live web search via DuckDuckGo |
 | Claude Code | `agent_claude_code.py` | Claude CLI | Complex reasoning tasks |
 | QA | `agent_qa.py` | qwen3.5:9b | Code review + execution testing |
 
 ### Shared Infrastructure
 
 - `scripts/shared/task_io.py` — task file I/O (read/write/move, supports `chain_to`, `retry_count`, `original_description`)
-- `scripts/shared/ollama_client.py` — Ollama REST wrapper (`http://192.168.1.13:11434`)
+- `scripts/shared/ollama_client.py` — Ollama REST wrapper; `chat()` for plain completions, `chat_with_tools()` for the tool-calling API
+- `scripts/shared/web_search.py` — DuckDuckGo search wrapper (no API key); returns formatted results as a string for LLM consumption
 - `scripts/shared/logger.py` — file + stdout logging, UTF-8 safe on Windows
 - `scripts/shared/config.py` — `ProjectConfig` class; loads `config.json` for Ollama URL, agent models, dashboard settings
 - `scripts/scheduler.py` — cross-platform Python scheduler (replaces cron on Windows)
@@ -113,6 +114,14 @@ A working Python file with ...
 - `ai-team-architecture.drawio` — Full system topology (João/Cowork → Orchestrator → Workers → QA → outbox/failed), color-coded by role, with Scheduler trigger lines
 - `ai-team-message-flows.drawio` — Message flow flowchart: task type routing, code/QA happy path, retry on first fail, failure report on second fail
 
+## Dependencies
+
+```
+pip install -r requirements.txt
+```
+
+Key packages: `requests`, `python-frontmatter`, `pyyaml`, `ddgs` (DuckDuckGo search, used by research agent), `flask`, `flask-cors` (dashboard).
+
 ## Next Steps (Optional)
 
 1. **Task dependencies** — parent-child task tracking for multi-step workflows
@@ -120,3 +129,4 @@ A working Python file with ...
 3. **Webhooks** — notify when tasks complete
 4. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
 5. **RAG** — use embedding + rerank models for context-aware task routing
+6. **Web search for other agents** — extend `chat_with_tools()` loop to coder or QA if useful

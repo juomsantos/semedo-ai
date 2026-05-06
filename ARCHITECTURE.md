@@ -84,7 +84,8 @@ AI Team/
   scripts/                 ← agent Python scripts
     shared/
       task_io.py           ← task file read/write/move helpers
-      ollama_client.py     ← Ollama REST wrapper
+      ollama_client.py     ← Ollama REST wrapper (chat + chat_with_tools)
+      web_search.py        ← DuckDuckGo search wrapper (used by research agent)
       logger.py            ← file + stdout logging
       config.py            ← config.json loader (ProjectConfig class)
     agent_orchestrator.py
@@ -129,12 +130,15 @@ All scripts live in `scripts/`. Each is standalone and invoked by the scheduler.
 |---|---|---|---|
 | `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 1 min |
 | `agent_coder.py` | qwen2.5-coder:7b | `agents/coder/inbox/` | 2 min |
-| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 2 min |
+| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 2 min | web search via DuckDuckGo |
 | `agent_claude_code.py` | Claude Code CLI | `agents/claude-code/inbox/` | 3 min |
 | `agent_qa.py` | qwen3.5:9b | `agents/qa/inbox/` | 2 min |
 
 ## Ollama API
 
+Two usage modes, both via `scripts/shared/ollama_client.py`:
+
+**Plain chat** (`OllamaClient.chat()`) — used by orchestrator, coder, QA:
 ```
 POST http://192.168.1.13:11434/api/chat
 {
@@ -146,6 +150,18 @@ POST http://192.168.1.13:11434/api/chat
   "stream": false
 }
 ```
+
+**Tool-calling loop** (`OllamaClient.chat_with_tools()`) — used by the research agent:
+```
+POST http://192.168.1.13:11434/api/chat
+{
+  "model": "qwen3.5:9b",
+  "messages": [...],
+  "tools": [{ "type": "function", "function": { "name": "web_search", ... } }],
+  "stream": false
+}
+```
+Returns either `{"type": "text", "content": "..."}` or `{"type": "tool_call", "name": "web_search", "arguments": {...}}`. The research agent loops up to 5 times, executing searches and injecting results, until a final text response is received.
 
 ## Claude Code Worker
 
