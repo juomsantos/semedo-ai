@@ -441,6 +441,7 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
     follow_ups = decision.get("follow_ups", [])
     if follow_ups:
         log.info(f"Creating {len(follow_ups)} follow-up task(s) for iteration {current_iteration + 1}")
+        created_follow_ups = {}  # track by worker for dependency wiring
         for idx, followup in enumerate(follow_ups):
             worker = followup.get("worker")
             inbox = WORKER_INBOXES.get(worker)
@@ -459,8 +460,18 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
                 parent_task_id=parent_task_id,
                 chain_to=chain_to,
             )
-            # Note: iteration gets incremented in parent task metadata when it re-enters validation
+            created_follow_ups[worker] = new_task_path
             log.info(f"Created follow-up task {new_task_path.name} → {worker}")
+
+        # Wire depends_on: if both research and coder follow-ups exist, coder must wait for research
+        if "research" in created_follow_ups and "coder" in created_follow_ups:
+            research_path = created_follow_ups["research"]
+            coder_path = created_follow_ups["coder"]
+            research_task = read_task(research_path)
+            coder_task = read_task(coder_path)
+            coder_task["meta"]["depends_on"] = [research_task["meta"]["id"]]
+            write_result(str(coder_path), coder_task["body"], meta=coder_task["meta"])
+            log.info(f"Wired follow-up dependency: coder {coder_path.name} depends on research {research_path.name}")
 
     if decision_type == "complete":
         # Mark parent task as truly complete (move from processing to outbox)

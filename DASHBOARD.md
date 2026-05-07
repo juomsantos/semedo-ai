@@ -61,6 +61,13 @@ Each task card shows the full task body plus **Approve** and **Reject** buttons:
 - **Approve** — moves the task to `agents/claude-code/inbox/`; the claude-code agent picks it up on its next poll
 - **Reject** — prompts for a rejection reason, then moves the task to `failed/` with the reason appended
 
+### Results Tab
+Browse completed and failed task output files grouped by agent. Select any agent from the dropdown (defaults to orchestrator) to see its results split into two sections:
+- **✓ Completed** — tasks that reached `outbox/`, with output preview (first 2000 characters), colour-coded in blue
+- **✗ Failed** — tasks in `failed/`, colour-coded in pink
+
+Updates every 1.5 seconds. Useful for quickly scanning what the agents produced without leaving the dashboard.
+
 ### History Tab
 Browse completed and failed tasks. Filter by status (All / Completed / Failed). Sorted newest-first, limited to 50 most recent. Click any task to see full details and result.
 
@@ -246,6 +253,31 @@ Create a new task in `inbox/` (submits to the orchestrator).
 **Response (201):** `{"task_id": "task_20260507_...", "message": "Task submitted to orchestrator."}`
 
 **Error (400):** `{"error": "description is required"}`
+
+### GET /api/results/:agent
+Completed and failed task outputs for a specific agent.
+
+**Path parameter:** `agent` — one of `orchestrator`, `coder`, `research`, `qa`, `claude-code`
+
+**Response:**
+```json
+{
+  "completed": [
+    {
+      "task_id": "task_20260507_142710_831910",
+      "preview": "## Result\n...",
+      "path": "outbox/task_20260507_142710_831910_result.md"
+    }
+  ],
+  "failed": [
+    {
+      "task_id": "task_20260507_143716_671698",
+      "preview": "## QA Failure\n...",
+      "path": "failed/task_20260507_143716_671698_result.md"
+    }
+  ]
+}
+```
 
 ### GET /api/agents/:agent/logs
 Recent logs for a specific agent.

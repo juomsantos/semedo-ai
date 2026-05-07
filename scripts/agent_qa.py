@@ -264,7 +264,7 @@ Please review this code and determine if it correctly solves the task."""
                 response = "(No final verdict produced after maximum search iterations.)"
 
         # Retry logic for empty responses
-        while response and response.strip() == "" and empty_response_retries < 2:
+        while (response is None or response.strip() == "") and empty_response_retries < 2:
             empty_response_retries += 1
             log.warning(f"Received empty response from LLM, retrying ({empty_response_retries}/2)...")
             messages.append({

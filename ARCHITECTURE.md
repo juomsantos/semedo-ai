@@ -244,7 +244,7 @@ All runtime settings in `config.json` at the project root, loaded via `scripts/s
 
 ```json
 {
-  "ollama": { "base_url": "http://192.168.1.13:11434", "timeout": 120 },
+  "ollama": { "base_url": "http://192.168.1.13:11434", "timeout": 240 },
   "agents": {
     "orchestrator": { "model": "qwen3.5:9b" },
     "coder":        { "model": "qwen2.5-coder:7b" },
@@ -292,6 +292,7 @@ REST endpoints:
 | `POST /api/pending-approvals/<id>/approve` | Move task to `agents/claude-code/inbox/` |
 | `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
 | `POST /api/tasks/submit` | Create a task in `inbox/` directly from the dashboard |
+| `GET /api/results/<agent>` | Completed and failed output files for a specific agent (first 2000 chars preview) |
 
 See `DASHBOARD.md` for full API docs, configuration, and troubleshooting.
 
