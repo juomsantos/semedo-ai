@@ -31,6 +31,7 @@ from shared.task_io import (
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.web_search import web_search
 from shared.logger import AgentLogger
+from shared.token_logger import log_tokens
 from shared.config import load_config
 
 AGENT_NAME = "research"
@@ -101,6 +102,7 @@ def run_agentic_loop(
         )
 
         if result["type"] == "text":
+            log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
             log.info(f"[{task_id}] Final answer received after {turn} search turn(s)")
             return result["content"]
 
@@ -163,11 +165,11 @@ def run_agentic_loop(
         ),
     })
     # One last plain chat call (no tools) to force a text response
-    fallback = client.chat(model=MODEL, system_prompt=None, user_message="", )
-    # Re-issue as a full message list call via chat_with_tools with empty tools
     result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
     if result["type"] == "text":
+        log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         return result["content"]
+    log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
     return "(No final answer produced after maximum search iterations.)"
 
 

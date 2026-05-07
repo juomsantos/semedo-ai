@@ -1,64 +1,62 @@
 # AI Team — Agent Coordination System
 
-This project is a fully implemented multi-agent AI coordination system. Agents communicate through a shared filesystem, polled on a schedule via `scripts/scheduler.py`. A real-time web dashboard is available at `http://localhost:5000`. See `ARCHITECTURE.md` for the full design, `IMPLEMENTATION_COMPLETE.md` for a summary of what was built, and `DASHBOARD.md` for dashboard usage.
+This project is a multi-agent AI coordination system. Agents communicate through a shared filesystem, polled on a schedule via `scripts/scheduler.py`. A real-time web dashboard is available at `http://localhost:5000`. See `ARCHITECTURE.md` for the full design and `DASHBOARD.md` for dashboard usage.
 
-## Current Status: Fully Implemented with Validation Loop ✓
+## Current Status: Fully Implemented ✓
 
-All agents are built, tested end-to-end, and running with **orchestrator validation loop** enabled. The orchestrator now continuously validates all completed work and decides whether to accept, refine, or request additional work until tasks meet requirements.
-
-**New:** See [ORCHESTRATOR_VALIDATION_LOOP.md](ORCHESTRATOR_VALIDATION_LOOP.md) for validation architecture, and [RESEARCH_CODER_HANDOFF.md](RESEARCH_CODER_HANDOFF.md) for task dependency wiring.
+All agents are built and running with a continuous **orchestrator validation loop**: completed subtask results flow into `validation/`, the orchestrator reviews them, and decides whether to accept, refine, or request more work — up to 5 iterations before forcing completion.
 
 ## What's Running
 
 A three-tier multi-agent system:
 
 1. **Claude (Cowork)** — master coordinator, writes tasks to `inbox/`
-2. **Orchestrator** (`qwen3.5:9b`) — polls `inbox/` every 1 min, routes and decomposes tasks into subtasks, writes to worker inboxes
+2. **Orchestrator** (`qwen3.5:9b`) — polls `inbox/` every 1 min, runs 3 phases per cycle: validate completed work → resolve task dependencies → decompose and dispatch new tasks
 3. **Workers:**
-   - `qwen2.5-coder:7b` (coder) — code generation, polls every 2 min
-   - `qwen3.5:9b` (research) — research, summarization, Q&A, polls every 2 min; has live web search via DuckDuckGo (model decides when to search, up to 5 searches per task)
-   - `claude CLI` (claude-code) — complex/reasoning tasks, polls every 3 min
-   - `qwen3.5:9b` (qa) — code review + execution testing, polls every 2 min
+   - `qwen2.5-coder:7b` (coder) — code generation, polls every 2 min; skips tasks with unresolved dependencies
+   - `qwen3.5:9b` (research) — research, summarization, Q&A, polls every 2 min; live web search via DuckDuckGo (up to 5 searches/task)
+   - `claude CLI` (claude-code) — complex/reasoning tasks, polls every 3 min; tasks require manual approval first (land in `agents/claude-code/pending/` before `inbox/`)
+   - `qwen3.5:9b` (qa) — code review + execution testing, polls every 2 min; live web search for error lookup (up to 3 searches/task)
 
-4. **Dashboard** (`Flask`) — real-time web UI at `http://localhost:5000`; polls agents, inbox, outbox, logs every 1.5s; start with `python dashboard/run_dashboard.py`
+4. **Dashboard** (`Flask`) — real-time web UI at `http://localhost:5000`; start with `python dashboard/run_dashboard.py`
 
 ## Key Technical Decisions
 
-- **Ollama REST API** at `http://192.168.1.13:11434/api/chat`, `stream: false`; research agent uses the tool-calling variant (`chat_with_tools`) for web search
+- **Ollama REST API** at `http://192.168.1.13:11434/api/chat`, `stream: false`
+- **Tool-calling loop** (`chat_with_tools`) used by both research and QA agents for DuckDuckGo web search
 - **Claude Code worker:** `subprocess.run(["claude", "--print", "-p", task_content])`
-- **Task files** are `.task.md` with YAML frontmatter (see `ARCHITECTURE.md` for schema)
-- **System prompts** stored as files in `agents/<name>/system_prompt.md` — edit those to change agent behaviour without touching code
-- **QA loop:** code tasks chain automatically through QA after the coder; one auto-retry on failure, failure report to `failed/` on second failure
-- **Concurrency guard:** orchestrator uses a lockfile (`processing/orchestrator.lock`) with PID validation so concurrent cron/scheduler invocations don't double-process
+- **Task files** are `.task.md` with YAML frontmatter — see `ARCHITECTURE.md` for full schema
+- **System prompts** stored in `agents/<name>/system_prompt.md` — edit to change agent behaviour without touching code. The orchestrator has two: `system_prompt.md` (decomposition) and `validation_system_prompt.md` (validation decisions)
+- **Validation loop:** workers move completed tasks to `validation/` (not `outbox/`) via `mark_awaiting_validation()`; the orchestrator's Phase 1 reviews them and decides complete/refine/redo/additional_work. Max 5 iterations
+- **Task dependencies:** coder tasks automatically get `depends_on: [research_task_id]` when research and code subtasks coexist; the orchestrator's Phase 2 wires the research result into `context_files` once complete, then unblocks the coder task
+- **Task ID uniqueness:** IDs include microseconds (`task_YYYYMMDD_HHMMSS_microseconds`) to prevent collisions when subtasks are created in the same second
+- **Approval gate for claude-code:** orchestrator routes to `pending_approval` which places tasks in `agents/claude-code/pending/`; João manually promotes them to `agents/claude-code/inbox/`
+- **Concurrency guard:** orchestrator uses a lockfile (`processing/orchestrator.lock`) with PID validation
 - **Scheduler** is a Python threading-based loop (`scripts/scheduler.py`), not cron — works on Windows
-- **Config** centralized in `config.json` (Ollama URL, agent models, dashboard port); loaded via `scripts/shared/config.py`
+- **Config** centralized in `config.json`; loaded via `scripts/shared/config.py` (`ProjectConfig` class)
 - **Dashboard** is a separate Flask process (`dashboard/app.py`); reads directly from the shared filesystem — no DB required
+- **Log timestamps** use `datetime.fromtimestamp(time.time(), tz=timezone.utc)` — correct UTC on Windows
 
 ## Folder Structure
 
 ```
 AI Team/
-  CLAUDE.md                           ← you are here
-  ARCHITECTURE.md                     ← full design doc
-  IMPLEMENTATION_COMPLETE.md          ← what was built and how
-  DASHBOARD.md                        ← dashboard usage and API reference
-  ORCHESTRATOR_VALIDATION_LOOP.md     ← validation architecture & workflow
-  RESEARCH_CODER_HANDOFF.md           ← task dependencies & context passing
-  ai-team-architecture.drawio         ← system topology diagram
-  ai-team-message-flows.drawio        ← message flow / QA loop diagram
-  config.json                         ← centralized config (Ollama URL, models, dashboard port)
-  RUN_SCHEDULER.bat                   ← Windows quick-start (agents only)
+  CLAUDE.md                              ← you are here
+  ARCHITECTURE.md                        ← full design doc
+  DASHBOARD.md                           ← dashboard usage and API reference
+  config.json                            ← centralized config
+  RUN_SCHEDULER.bat / RUN_SCHEDULER.sh   ← quick-start scripts
   requirements.txt
-  inbox/                              ← drop .task.md files here to submit work
-  processing/                         ← parent tasks in validation loop (+ orchestrator.lock)
-  validation/                         ← completed subtasks awaiting orchestrator validation
-  outbox/                             ← approved & completed results
-  failed/                             ← QA failure reports + errored tasks
-  context/                            ← optional shared context files for tasks
+  inbox/                   ← drop .task.md files here to submit work
+  processing/              ← parent tasks held during validation loop (+ orchestrator.lock)
+  validation/              ← completed subtasks awaiting orchestrator approval
+  outbox/                  ← approved & completed results
+  failed/                  ← QA failure reports + hard-errored tasks
+  context/                 ← optional shared context files for tasks
   agents/
     orchestrator/
-      system_prompt.md                ← decomposition prompt
-      validation_system_prompt.md     ← validation decision prompt
+      system_prompt.md             ← decomposition & routing prompt
+      validation_system_prompt.md  ← validation decision prompt
     coder/
       inbox/
       system_prompt.md
@@ -66,27 +64,24 @@ AI Team/
       inbox/
       system_prompt.md
     claude-code/
-      inbox/
+      inbox/              ← approved tasks (ready to run)
+      pending/            ← tasks awaiting manual approval
     qa/
       inbox/
       system_prompt.md
-  dashboard/                          ← real-time web monitoring UI
-    app.py                            ← Flask REST API server
-    run_dashboard.py                  ← launcher (reads config.json)
-    task_monitor.py                   ← filesystem scanner
-    templates/index.html              ← dashboard UI
-    static/dashboard.js               ← frontend polling logic
-    static/dashboard.css              ← styling
-    README.md                         ← dashboard-specific docs
-  logs/                               ← per-agent logs at logs/<agent>/general.log
+  dashboard/
+    app.py / run_dashboard.py / task_monitor.py
+    templates/index.html
+    static/dashboard.js / dashboard.css
+  logs/                   ← per-agent logs at logs/<agent>/general.log
   scripts/
     shared/
-      task_io.py                      ← task file I/O helpers
-      ollama_client.py                ← Ollama REST wrapper (chat + chat_with_tools)
-      web_search.py                   ← DuckDuckGo search wrapper (used by research agent)
-      logger.py                       ← UTF-8-safe logger (now with correct UTC timestamps)
-      config.py                       ← config.json loader (ProjectConfig class)
-    agent_orchestrator.py             ← now with validation loop (3 phases)
+      task_io.py          ← task file I/O, dependency resolution, validation grouping
+      ollama_client.py    ← Ollama REST wrapper (chat + chat_with_tools)
+      web_search.py       ← DuckDuckGo search wrapper
+      logger.py           ← UTC-correct logger
+      config.py           ← config.json loader
+    agent_orchestrator.py
     agent_coder.py
     agent_research.py
     agent_claude_code.py
@@ -96,24 +91,20 @@ AI Team/
 
 ## Running the System
 
-**Terminal 1 — Agents (Windows batch file):**
+**Terminal 1 — Agents:**
 ```
-RUN_SCHEDULER.bat
+RUN_SCHEDULER.bat        (Windows)
+RUN_SCHEDULER.sh         (Linux/Mac)
 ```
+Or manually: `python scripts/scheduler.py`
 
-Or manually:
-```bash
-python scripts/scheduler.py
-```
+Logs: `logs/scheduler/general.log` and `logs/<agent>/general.log`. Press Ctrl+C to stop.
 
-All 5 agents start on their intervals. Logs: `logs/scheduler/general.log` and `logs/<agent>/general.log`. Press Ctrl+C to stop.
-
-**Terminal 2 — Dashboard (optional, run independently):**
+**Terminal 2 — Dashboard (optional):**
 ```bash
 python dashboard/run_dashboard.py
 ```
-
-Open `http://localhost:5000` in your browser. Port and other settings are in `config.json` under `dashboard`. The dashboard can run independently of the scheduler.
+Open `http://localhost:5000`. Runs independently of the scheduler.
 
 ## Submitting a Task
 
@@ -121,14 +112,14 @@ Drop a `.task.md` file in `inbox/`:
 
 ```markdown
 ---
-id: task_20260506_001
+id: task_20260507_100000_000000
 type: code
 priority: medium
 created_by: claude-cowork
-created_at: 2026-05-06T10:00:00
+created_at: 2026-05-07T10:00:00
 assigned_to: orchestrator
 status: pending
-output_path: outbox/task_20260506_001_result.md
+output_path: outbox/task_20260507_100000_000000_result.md
 context_files: []
 ---
 
@@ -139,22 +130,19 @@ Write a Python function that ...
 A working Python file with ...
 ```
 
-The orchestrator picks it up within 1 minute and routes it to the right worker.
+The orchestrator picks it up within 1 minute, decomposes it, and routes subtasks to workers.
 
 ## Monitoring
 
-- **Dashboard:** `http://localhost:5000` — real-time task status, agent stats, live logs (start with `python dashboard/run_dashboard.py`)
-- Results land in `outbox/`
-- QA failures (with execution output + feedback) land in `failed/`
-- Logs: `logs/<agent>/general.log`
+- **Dashboard:** `http://localhost:5000` — real-time task status, agent stats, live logs
+- **Task flow:** `inbox/` → `processing/` → workers → `validation/` → `outbox/` (or `failed/`)
+- **Logs:** `logs/<agent>/general.log`
+- **Pending claude-code tasks:** `agents/claude-code/pending/` — manually move to `agents/claude-code/inbox/` to approve
 
-## How to Resume / Next Steps
+## Potential Extensions
 
-The system is complete and working. Potential extensions:
-
-1. **Task dependencies** — parent-child task tracking for multi-step workflows
-2. **Result aggregation** — summarize outputs from multiple agents
+1. **Parent-child UI** — dashboard currently shows a flat task list; hierarchy view would help track validation iterations
+2. **Worker-initiated research** — allow coder/QA to drop tasks in `research/inbox/` mid-execution and yield until resolved
 3. **Webhooks** — notify when tasks complete
 4. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
-5. **RAG** — use embedding + rerank models for context-aware task routing
-6. **Web search for other agents** — extend `chat_with_tools()` loop to coder or QA if useful
+5. **RAG** — embedding + rerank for context-aware routing

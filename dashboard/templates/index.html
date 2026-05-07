@@ -95,7 +95,21 @@
         <section id="tab-agents" class="tab-content">
             <h3>Agent Statistics</h3>
             <div id="agent-stats" class="agent-stats">
-                <p class="no-data">Loading...</p>
+                <table class="stats-table">
+                    <thead>
+                        <tr>
+                            <th>Agent</th>
+                            <th>Completed</th>
+                            <th>Errors</th>
+                            <th>Prompt Tokens</th>
+                            <th>Completion Tokens</th>
+                            <th>LLM Calls</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agent-stats-body">
+                        <tr><td colspan="6" class="no-data">Loading...</td></tr>
+                    </tbody>
+                </table>
             </div>
         </section>
 

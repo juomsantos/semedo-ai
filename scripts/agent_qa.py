@@ -33,6 +33,7 @@ from shared.task_io import (
 )
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.web_search import web_search
+from shared.token_logger import log_tokens
 from shared.logger import AgentLogger
 from shared.config import load_config
 
@@ -188,6 +189,7 @@ Please review this code and determine if it correctly solves the task."""
             )
 
             if result["type"] == "text":
+                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
                 response = result["content"]
                 log.info(f"QA review received ({len(response)} chars) after {turn} search turn(s)")
                 break
@@ -253,9 +255,11 @@ Please review this code and determine if it correctly solves the task."""
             })
             result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
             if result["type"] == "text":
+                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
                 response = result["content"]
                 log.info(f"QA review received ({len(response)} chars) on final call")
             else:
+                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
                 response = "(No final verdict produced after maximum search iterations.)"
 
         # Parse verdict and feedback from response

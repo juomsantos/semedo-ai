@@ -202,16 +202,19 @@ class TaskMonitor:
         return self._get_agent_stats()
 
     def _get_agent_stats(self) -> Dict[str, Any]:
-        """Calculate per-agent statistics."""
+        """Calculate per-agent statistics including token usage."""
         stats = {}
         agents = ["orchestrator", "coder", "research", "qa", "claude-code"]
-        
+
+        # Get token stats
+        token_stats = self.get_token_stats()
+
         for agent in agents:
             agent_logs = self.logs_dir / agent / "general.log"
-            
+
             completed_count = 0
             error_count = 0
-            
+
             if agent_logs.exists():
                 try:
                     log_content = agent_logs.read_text(encoding="utf-8", errors="ignore")
@@ -219,12 +222,56 @@ class TaskMonitor:
                     error_count = len(re.findall(r"\[ERROR\]", log_content))
                 except Exception:
                     pass
-            
+
+            token_info = token_stats.get(agent, {})
             stats[agent] = {
                 "completed": completed_count,
                 "errors": error_count,
+                "prompt_tokens": token_info.get("prompt_tokens", 0),
+                "completion_tokens": token_info.get("completion_tokens", 0),
+                "llm_calls": token_info.get("llm_calls", 0),
             }
-        
+
+        return stats
+
+    def get_token_stats(self) -> Dict[str, Any]:
+        """
+        Read logs/<agent>/tokens.jsonl for each agent.
+        Returns: { "orchestrator": {"prompt": N, "completion": N, "calls": N}, ... }
+        """
+        stats = {}
+        agents = ["orchestrator", "coder", "research", "qa", "claude-code"]
+
+        for agent in agents:
+            token_log = self.logs_dir / agent / "tokens.jsonl"
+            prompt_total = 0
+            completion_total = 0
+            call_count = 0
+
+            if token_log.exists():
+                try:
+                    with token_log.open("r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                entry = json.loads(line)
+                                prompt_total += entry.get("prompt", 0)
+                                completion_total += entry.get("completion", 0)
+                                call_count += 1
+                            except json.JSONDecodeError:
+                                # Skip malformed lines silently
+                                pass
+                except Exception:
+                    pass
+
+            stats[agent] = {
+                "prompt_tokens": prompt_total,
+                "completion_tokens": completion_total,
+                "llm_calls": call_count,
+            }
+
         return stats
 
     def _parse_task_file(

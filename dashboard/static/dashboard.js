@@ -326,19 +326,33 @@ async function updateAgentStats() {
     try {
         const response = await fetch('/api/agents');
         const stats = await response.json();
-        
-        const container = document.getElementById('agent-stats');
-        const html = Object.entries(stats).map(([agent, data]) => `
-            <div class="agent-stat">
-                <div class="agent-name">${agent}</div>
-                <div class="agent-metrics">
-                    <span class="metric">✓ ${data.completed} completed</span>
-                    <span class="metric error">✗ ${data.errors} errors</span>
-                </div>
-            </div>
-        `).join('');
-        
-        container.innerHTML = html;
+
+        const tbody = document.getElementById('agent-stats-body');
+        const rows = Object.entries(stats).map(([agent, data]) => {
+            const promptTokens = data.prompt_tokens || 0;
+            const completionTokens = data.completion_tokens || 0;
+            const llmCalls = data.llm_calls || 0;
+
+            // Show "—" for claude-code if all token values are 0
+            const showDash = agent === 'claude-code' && promptTokens === 0 && completionTokens === 0 && llmCalls === 0;
+
+            const promptDisplay = showDash ? '—' : promptTokens.toLocaleString();
+            const completionDisplay = showDash ? '—' : completionTokens.toLocaleString();
+            const callsDisplay = showDash ? '—' : llmCalls.toLocaleString();
+
+            return `
+                <tr>
+                    <td><strong>${agent}</strong></td>
+                    <td>${data.completed}</td>
+                    <td class="error">${data.errors}</td>
+                    <td>${promptDisplay}</td>
+                    <td>${completionDisplay}</td>
+                    <td>${callsDisplay}</td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.innerHTML = rows || '<tr><td colspan="6" class="no-data">No agents</td></tr>';
     } catch (error) {
         console.error('Error updating agent stats:', error);
     }

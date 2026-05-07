@@ -27,6 +27,7 @@ from shared.task_io import (
 )
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.logger import AgentLogger
+from shared.token_logger import log_tokens
 from shared.config import load_config
 
 AGENT_NAME = "coder"
@@ -68,6 +69,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     try:
         response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
+        log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         log.info(f"Coder response received ({len(response)} chars)")
     except OllamaError as e:
         log.error(f"Ollama error for {task_id}: {e}")

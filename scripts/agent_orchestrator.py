@@ -46,6 +46,7 @@ from shared.task_io import (
     write_result,
     PROJECT_ROOT,
 )
+from shared.token_logger import log_tokens
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.logger import AgentLogger
 from shared.config import load_config
@@ -263,6 +264,7 @@ Evaluate these results and decide if the work is complete. You have {max_iterati
 
     try:
         response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=user_message)
+        log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         log.info(f"Validation response received ({len(response)} chars)")
     except OllamaError as e:
         log.error(f"Ollama error during validation of {parent_task_id}: {e}")
@@ -294,6 +296,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     try:
         response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
+        log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         log.info(f"Orchestrator LLM response received ({len(response)} chars)")
     except OllamaError as e:
         log.error(f"Ollama error for {task_id}: {e}")

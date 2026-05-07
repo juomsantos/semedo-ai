@@ -40,6 +40,7 @@ class OllamaClient:
     def __init__(self, base_url: str = OLLAMA_BASE_URL, timeout: int = DEFAULT_TIMEOUT):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.last_token_counts = {"prompt": 0, "completion": 0}
 
     def chat(
         self,
@@ -84,6 +85,12 @@ class OllamaClient:
             raise OllamaError(f"Ollama HTTP error: {e} — {resp.text}")
 
         data = resp.json()
+
+        # Capture token counts
+        self.last_token_counts = {
+            "prompt": data.get("prompt_eval_count", 0),
+            "completion": data.get("eval_count", 0),
+        }
 
         try:
             return data["message"]["content"]
@@ -148,6 +155,12 @@ class OllamaClient:
             raise OllamaError(f"Ollama HTTP error: {e} — {resp.text}")
 
         data = resp.json()
+
+        # Capture token counts
+        self.last_token_counts = {
+            "prompt": data.get("prompt_eval_count", 0),
+            "completion": data.get("eval_count", 0),
+        }
 
         try:
             message = data["message"]
