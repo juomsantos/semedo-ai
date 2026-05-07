@@ -14,6 +14,8 @@ Responsibilities:
 """
 
 import sys
+import os
+import atexit
 import re
 import subprocess
 import tempfile
@@ -45,6 +47,45 @@ SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "qa" / "system_prompt.md"
 
 # Safety cap: maximum search calls per task
 MAX_TOOL_TURNS = 3
+
+LOCK_FILE = PROJECT_ROOT / "agents" / "qa" / "qa.lock"
+
+
+def _pid_exists(pid: int) -> bool:
+    """Cross-platform check: is this PID still alive?"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, SystemError):
+        return False
+
+
+def acquire_lock(log) -> bool:
+    """
+    Try to write a lockfile containing our PID.
+    Returns True if acquired, False if another instance is already running.
+    Stale locks (dead PID) are removed automatically.
+    """
+    if LOCK_FILE.exists():
+        try:
+            pid = int(LOCK_FILE.read_text().strip())
+            if _pid_exists(pid):
+                log.info(f"QA agent already running (PID {pid}) — skipping this run")
+                return False
+            else:
+                log.warning(f"Removing stale lockfile (PID {pid} no longer running)")
+                LOCK_FILE.unlink()
+        except Exception:
+            LOCK_FILE.unlink(missing_ok=True)
+
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOCK_FILE.write_text(str(os.getpid()))
+    return True
+
+
+def release_lock():
+    """Remove the lockfile. Registered with atexit so it runs on clean exit or exception."""
+    LOCK_FILE.unlink(missing_ok=True)
 
 # Tool definition sent to the model on every request
 WEB_SEARCH_TOOL = {
@@ -453,6 +494,12 @@ This code is ready for production.
 
 def main():
     log = AgentLogger(AGENT_NAME)
+
+    if not acquire_lock(log):
+        return
+
+    atexit.register(release_lock)
+
     client = OllamaClient()
 
     if not client.is_available():
