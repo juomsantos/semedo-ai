@@ -32,6 +32,7 @@ from shared.task_io import (
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
+from shared.web_search import web_search
 from shared.logger import AgentLogger
 from shared.config import load_config
 
@@ -40,6 +41,31 @@ _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "qa" / "inbox"
 SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "qa" / "system_prompt.md"
+
+# Safety cap: maximum search calls per task
+MAX_TOOL_TURNS = 3
+
+# Tool definition sent to the model on every request
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the web using DuckDuckGo. Use this to look up runtime errors, "
+            "library documentation, or code patterns when execution output alone is insufficient."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A concise, specific search query.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
 
 
 def load_system_prompt() -> str:
@@ -111,7 +137,7 @@ def review_with_llm(
     task_description: str, code: str, execution: dict, client: OllamaClient, log: AgentLogger
 ) -> dict:
     """
-    Call qwen3.5:9b to review code.
+    Call qwen3.5:9b to review code with optional web search.
     Return {verdict: 'PASS'|'FAIL', feedback: str}.
     """
     system_prompt = load_system_prompt()
@@ -144,8 +170,93 @@ def review_with_llm(
 Please review this code and determine if it correctly solves the task."""
 
     try:
-        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
-        log.info(f"QA review received ({len(response)} chars)")
+        # Build initial messages for the agentic loop
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+        # Run tool-calling loop up to MAX_TOOL_TURNS iterations
+        tools = [WEB_SEARCH_TOOL]
+        response = None
+
+        for turn in range(MAX_TOOL_TURNS):
+            result = client.chat_with_tools(
+                model=MODEL,
+                messages=messages,
+                tools=tools,
+            )
+
+            if result["type"] == "text":
+                response = result["content"]
+                log.info(f"QA review received ({len(response)} chars) after {turn} search turn(s)")
+                break
+
+            if result["type"] == "tool_call":
+                tool_name = result["name"]
+                arguments = result["arguments"]
+
+                if tool_name != "web_search":
+                    # Unknown tool — tell the model and continue
+                    log.warning(f"Model called unknown tool '{tool_name}' — skipping")
+                    messages.append({"role": "assistant", "content": "", "tool_calls": [
+                        {"function": {"name": tool_name, "arguments": arguments}}
+                    ]})
+                    messages.append({
+                        "role": "tool",
+                        "content": f"ERROR: Tool '{tool_name}' is not available.",
+                    })
+                    continue
+
+                query = arguments.get("query", "").strip()
+                if not query:
+                    log.warning(f"web_search called with empty query — skipping")
+                    messages.append({"role": "assistant", "content": "", "tool_calls": [
+                        {"function": {"name": "web_search", "arguments": arguments}}
+                    ]})
+                    messages.append({
+                        "role": "tool",
+                        "content": "ERROR: 'query' parameter was empty. Please provide a search query.",
+                    })
+                    continue
+
+                log.info(f"web_search({turn + 1}/{MAX_TOOL_TURNS}): {query!r}")
+                search_results = web_search(query)
+                log.info(f"Search returned {len(search_results)} chars")
+
+                if search_results.startswith("ERROR:"):
+                    log.error(f"Search tool error — aborting loop: {search_results}")
+                    raise OllamaError(f"Web search unavailable: {search_results}")
+
+                # Append assistant tool call and tool result to history
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"function": {"name": "web_search", "arguments": arguments}}
+                    ],
+                })
+                messages.append({
+                    "role": "tool",
+                    "content": search_results,
+                })
+
+        # If MAX_TOOL_TURNS reached without a text response, request final answer
+        if response is None:
+            log.warning(f"Reached {MAX_TOOL_TURNS} search turns — requesting final answer")
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You have reached the maximum number of web searches allowed. "
+                    "Please now provide your final review verdict based on the information gathered."
+                ),
+            })
+            result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
+            if result["type"] == "text":
+                response = result["content"]
+                log.info(f"QA review received ({len(response)} chars) on final call")
+            else:
+                response = "(No final verdict produced after maximum search iterations.)"
 
         # Parse verdict and feedback from response
         if "VERDICT: PASS" in response.upper():
