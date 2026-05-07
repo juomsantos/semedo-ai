@@ -330,27 +330,35 @@ class TaskMonitor:
             return None
 
     def _parse_yaml_frontmatter(self, yaml_str: str) -> Dict[str, Any]:
-        """Simple YAML parser for frontmatter."""
+        """Simple YAML parser for frontmatter. Handles Windows paths with backslashes."""
         data = {}
         for line in yaml_str.split("\n"):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            
+
             if ":" in line:
-                key, value = line.split(":", 1)
-                key = key.strip()
-                value = value.strip().strip("'\"")
-                
-                # Convert retry_count to int
-                if key == "retry_count":
-                    try:
-                        value = int(value)
-                    except ValueError:
-                        pass
-                
-                data[key] = value
-        
+                try:
+                    key, value = line.split(":", 1)
+                    key = key.strip()
+                    value = value.strip()
+
+                    # Remove surrounding quotes, but preserve backslashes in paths
+                    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1]
+
+                    # Convert retry_count to int
+                    if key == "retry_count":
+                        try:
+                            value = int(value)
+                        except ValueError:
+                            pass
+
+                    data[key] = value
+                except Exception:
+                    # Skip lines that can't be parsed
+                    continue
+
         return data
 
     def _get_task_logs(self, task_id: str) -> List[Dict[str, str]]:
@@ -567,29 +575,64 @@ class TaskMonitor:
         completed_tasks = []
         failed_tasks = []
 
-        # Scan outbox for completed tasks by this agent
-        if self.outbox.exists():
-            for task_file in sorted(self.outbox.glob("*.task.md"), reverse=True):
-                task = self._parse_task_file(task_file, "completed", "outbox")
-                if task and (task.get("assigned_to") == agent or (agent == "orchestrator" and task.get("assigned_to") == "orchestrator")):
-                    # Try to read the result file
-                    task_id = task["id"]
-                    result_file = self.outbox / f"{task_id}_result.md"
-                    output = ""
-                    if result_file.exists():
-                        try:
-                            output = result_file.read_text(encoding="utf-8")[:2000]  # First 2000 chars
-                        except Exception:
-                            pass
+        # For orchestrator: scan outbox for .task.md files
+        if agent == "orchestrator":
+            if self.outbox.exists():
+                for task_file in sorted(self.outbox.glob("*.task.md"), reverse=True):
+                    task = self._parse_task_file(task_file, "completed", "outbox")
+                    if task and task.get("assigned_to") == "orchestrator":
+                        # Try to read the result file
+                        task_id = task["id"]
+                        result_file = self.outbox / f"{task_id}_result.md"
+                        output = ""
+                        if result_file.exists():
+                            try:
+                                output = result_file.read_text(encoding="utf-8")[:2000]  # First 2000 chars
+                            except Exception:
+                                pass
 
-                    completed_tasks.append({
-                        "id": task_id,
-                        "type": task["type"],
-                        "created_at": task["created_at"],
-                        "priority": task["priority"],
-                        "output": output,
-                        "body_preview": task["body_preview"],
-                    })
+                        completed_tasks.append({
+                            "id": task_id,
+                            "type": task["type"],
+                            "created_at": task["created_at"],
+                            "priority": task["priority"],
+                            "output": output,
+                            "body_preview": task["body_preview"],
+                        })
+        else:
+            # For worker agents (coder, research, qa, claude-code): scan outbox for _result.md files
+            # Worker task .task.md files go to validation/, not outbox/
+            if self.outbox.exists():
+                for result_file in sorted(self.outbox.glob("*_result.md"), reverse=True):
+                    try:
+                        # Try to read metadata from result file
+                        result_content = result_file.read_text(encoding="utf-8")
+
+                        # Extract task ID from filename
+                        filename = result_file.stem  # Remove .md extension
+                        task_id = filename.replace("_result", "")  # task_id_result -> task_id
+
+                        # Try to extract agent and type from result content metadata
+                        # Result files have a simple YAML frontmatter with metadata
+                        if result_content.startswith("---"):
+                            parts = result_content.split("---", 2)
+                            if len(parts) >= 2:
+                                metadata = self._parse_yaml_frontmatter(parts[1].strip())
+                                result_agent = metadata.get("agent", "")
+
+                                # Include this result if it matches the requested agent
+                                if result_agent == agent:
+                                    output = result_content.split("---", 2)[-1].strip()[:2000] if len(parts) >= 3 else result_content[:2000]
+                                    completed_tasks.append({
+                                        "id": task_id,
+                                        "type": metadata.get("type", "unknown"),
+                                        "created_at": metadata.get("created_at", ""),
+                                        "priority": "medium",  # Not stored in result metadata
+                                        "output": output,
+                                        "body_preview": "",
+                                    })
+                    except Exception:
+                        pass
 
         # Scan failed for failed tasks by this agent
         if self.failed.exists():
