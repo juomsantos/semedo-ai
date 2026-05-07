@@ -43,67 +43,59 @@ Settings in `config.json` under `dashboard` section:
 ## Features
 
 ### System Status Panel
-- **Pending**: Tasks awaiting processing
-- **Processing**: Currently active tasks
-- **Completed**: Successfully finished tasks
-- **Failed**: Tasks that errored or QA rejected
+- **Pending**: Tasks awaiting processing (inbox + all worker inboxes)
+- **Awaiting Approval**: Tasks in `agents/claude-code/pending/` awaiting your decision
+- **Processing**: Tasks currently being worked on
+- **Completed**: Successfully finished tasks (in `outbox/`)
+- **Failed**: Tasks that errored or QA rejected (in `failed/`)
 
 Real-time update every 1.5 seconds.
 
 ### Active Tasks Tab
-View all tasks currently being processed by agents. Shows:
-- Task ID (unique identifier)
-- Task type (code, research, summarize, etc)
-- Priority (high, medium, low)
-- Creation timestamp and age
-- Creator and assigned agent
-- Retry count (if retried)
+View all tasks currently being processed by agents. Shows task ID, type, priority, age, creator, and assigned agent. Retry count shown if the task has been retried. Click any task to open the details modal.
 
-Click any task to see full details, logs, and results.
+### Approvals Tab
+Shows all tasks in `agents/claude-code/pending/` — tasks the orchestrator routed to claude-code that require manual approval before running. A badge on the tab shows the count when tasks are waiting.
+
+Each task card shows the full task body plus **Approve** and **Reject** buttons:
+- **Approve** — moves the task to `agents/claude-code/inbox/`; the claude-code agent picks it up on its next poll
+- **Reject** — prompts for a rejection reason, then moves the task to `failed/` with the reason appended
 
 ### History Tab
-Browse completed and failed tasks. Filter by status:
-- **Completed**: Successfully finished
-- **Failed**: Execution errors or QA rejections
-
-Sorted newest-first, limited to 50 most recent.
+Browse completed and failed tasks. Filter by status (All / Completed / Failed). Sorted newest-first, limited to 50 most recent. Click any task to see full details and result.
 
 ### Agent Stats Tab
 Per-agent statistics showing:
-- Tasks completed
-- Error count
+- **Completed** — tasks finished (parsed from log files)
+- **Errors** — error count from logs
+- **Prompt Tokens** — cumulative input tokens (from `logs/<agent>/tokens.jsonl`)
+- **Completion Tokens** — cumulative output tokens
+- **LLM Calls** — total Ollama calls
 
-Updated in real-time to track agent performance.
+`claude-code` shows `—` in token columns (it uses the Claude CLI, not Ollama directly).
 
 ### Logs Tab
-View agent execution logs. Select any agent:
-- orchestrator
-- coder
-- research
-- qa
-- claude-code
-- scheduler
+View agent execution logs. Select any agent (orchestrator, coder, research, qa, claude-code, scheduler). Shows last 50 log lines, auto-scrolls to bottom on update.
 
-Shows last 50 log lines, auto-scrolls to bottom on update.
+### Submit Task Tab
+Submit a new task to the orchestrator directly from the dashboard without touching the filesystem.
+
+Fields:
+- **Type** — code | research | summarize | review | plan (default: code)
+- **Priority** — medium | high | low (default: medium)
+- **Description** — what to build or research (required)
+- **Expected Output** — what a correct result looks like (optional)
+
+On submit, creates a `.task.md` file in `inbox/` and returns the task ID. The new task appears in the Active Tasks tab within ~1.5 seconds. Type and priority fields retain their values for quick follow-up submissions.
 
 ### Task Details Modal
-Click any task to open detailed view:
+Click any task to open the detailed view:
 
-**Metadata**:
-- Type, priority, status, location
-- Creator, assigned agent
-- Creation time, age
-- Retry history
+**Metadata**: type, priority, status, location, creator, assigned agent, creation time, age, retry history.
 
-**Logs**:
-All timestamped log entries for this task across all agents. Shows:
-- Timestamp
-- Log level (INFO, WARN, ERROR)
-- Agent name
-- Log message
+**Logs**: all timestamped log entries for this task across all agents (timestamp, level, agent, message).
 
-**Result**:
-First 1000 characters of task result file (if exists). For completed tasks, shows agent output. For failed tasks, shows error details.
+**Result**: first 1000 characters of the task's result file, if it exists.
 
 ## REST API
 
@@ -120,17 +112,14 @@ System status and metrics.
     "pending": 5,
     "processing": 2,
     "completed": 42,
-    "failed": 1
+    "failed": 1,
+    "awaiting_approval": 1
   },
   "ollama_lock": {
     "pid": 12345,
     "timestamp": 1234567890
   },
-  "agent_stats": {
-    "orchestrator": {"completed": 10, "errors": 0},
-    "coder": {"completed": 8, "errors": 1},
-    ...
-  }
+  "agent_stats": { ... }
 }
 ```
 
@@ -190,18 +179,73 @@ Full details for a specific task.
 ```
 
 ### GET /api/agents
-Per-agent statistics.
+Per-agent statistics including token usage.
 
 **Response:**
 ```json
 {
-  "orchestrator": {"completed": 10, "errors": 0},
-  "coder": {"completed": 8, "errors": 1},
-  "research": {"completed": 12, "errors": 0},
-  "qa": {"completed": 8, "errors": 0},
-  "claude-code": {"completed": 2, "errors": 0}
+  "orchestrator": {"completed": 10, "errors": 0, "prompt_tokens": 4821, "completion_tokens": 1203, "llm_calls": 14},
+  "coder":        {"completed": 8,  "errors": 1, "prompt_tokens": 3102, "completion_tokens": 892,  "llm_calls": 9},
+  "research":     {"completed": 12, "errors": 0, "prompt_tokens": 7431, "completion_tokens": 2104, "llm_calls": 12},
+  "qa":           {"completed": 8,  "errors": 0, "prompt_tokens": 5210, "completion_tokens": 1441, "llm_calls": 8},
+  "claude-code":  {"completed": 2,  "errors": 0, "prompt_tokens": 0,    "completion_tokens": 0,    "llm_calls": 0}
 }
 ```
+
+Token counts are read from `logs/<agent>/tokens.jsonl` and are cumulative across all runs.
+
+### GET /api/pending-approvals
+List all tasks in `agents/claude-code/pending/`.
+
+**Response:**
+```json
+{
+  "tasks": [
+    {
+      "id": "task_20260507_110000_000000",
+      "type": "code",
+      "priority": "medium",
+      "created_by": "orchestrator",
+      "created_at": "2026-05-07T11:00:00",
+      "assigned_to": "pending_approval",
+      "status": "pending_approval",
+      "age_seconds": 120,
+      "body": "## Task Description\n..."
+    }
+  ],
+  "count": 1
+}
+```
+
+### POST /api/pending-approvals/:id/approve
+Move a pending task to `agents/claude-code/inbox/`. Updates `status: pending` in frontmatter.
+
+**Response:** `{"status": "approved", "task_id": "..."}`
+
+### POST /api/pending-approvals/:id/reject
+Move a pending task to `failed/` with the rejection reason appended to the task body.
+
+**Request body (optional):** `{"reason": "Not safe to run"}`
+
+**Response:** `{"status": "rejected", "task_id": "..."}`
+
+### POST /api/tasks/submit
+Create a new task in `inbox/` (submits to the orchestrator).
+
+**Request body:**
+```json
+{
+  "description": "Write a Python script that...",
+  "type": "code",
+  "priority": "medium",
+  "expected_output": "A working script that..."
+}
+```
+`type` must be one of: `code`, `research`, `summarize`, `review`, `plan`. `priority` must be `high`, `medium`, or `low`. `description` is required; `expected_output` defaults to `"See task description."` if omitted.
+
+**Response (201):** `{"task_id": "task_20260507_...", "message": "Task submitted to orchestrator."}`
+
+**Error (400):** `{"error": "description is required"}`
 
 ### GET /api/agents/:agent/logs
 Recent logs for a specific agent.

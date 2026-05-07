@@ -30,11 +30,12 @@ A three-tier multi-agent system:
 - **Validation loop:** workers move completed tasks to `validation/` (not `outbox/`) via `mark_awaiting_validation()`; the orchestrator's Phase 1 reviews them and decides complete/refine/redo/additional_work. Max 5 iterations
 - **Task dependencies:** coder tasks automatically get `depends_on: [research_task_id]` when research and code subtasks coexist; the orchestrator's Phase 2 wires the research result into `context_files` once complete, then unblocks the coder task
 - **Task ID uniqueness:** IDs include microseconds (`task_YYYYMMDD_HHMMSS_microseconds`) to prevent collisions when subtasks are created in the same second
-- **Approval gate for claude-code:** orchestrator routes to `pending_approval` which places tasks in `agents/claude-code/pending/`; João manually promotes them to `agents/claude-code/inbox/`
+- **Approval gate for claude-code:** orchestrator routes to `pending_approval` which places tasks in `agents/claude-code/pending/`; approve or reject from the dashboard **Approvals** tab (or manually move files)
+- **Token logging:** after every Ollama call, each agent appends `{ts, task_id, prompt, completion}` to `logs/<agent>/tokens.jsonl` via `scripts/shared/token_logger.py`; the dashboard Agent Stats tab shows cumulative totals
 - **Concurrency guard:** orchestrator uses a lockfile (`processing/orchestrator.lock`) with PID validation
 - **Scheduler** is a Python threading-based loop (`scripts/scheduler.py`), not cron — works on Windows
 - **Config** centralized in `config.json`; loaded via `scripts/shared/config.py` (`ProjectConfig` class)
-- **Dashboard** is a separate Flask process (`dashboard/app.py`); reads directly from the shared filesystem — no DB required
+- **Dashboard** is a separate Flask process (`dashboard/app.py`); reads directly from the shared filesystem — no DB required; tasks can also be submitted directly from the **Submit Task** tab
 - **Log timestamps** use `datetime.fromtimestamp(time.time(), tz=timezone.utc)` — correct UTC on Windows
 
 ## Folder Structure
@@ -77,7 +78,8 @@ AI Team/
   scripts/
     shared/
       task_io.py          ← task file I/O, dependency resolution, validation grouping
-      ollama_client.py    ← Ollama REST wrapper (chat + chat_with_tools)
+      ollama_client.py    ← Ollama REST wrapper (chat + chat_with_tools); stores last_token_counts
+      token_logger.py     ← appends per-call token usage to logs/<agent>/tokens.jsonl
       web_search.py       ← DuckDuckGo search wrapper
       logger.py           ← UTC-correct logger
       config.py           ← config.json loader
@@ -108,7 +110,9 @@ Open `http://localhost:5000`. Runs independently of the scheduler.
 
 ## Submitting a Task
 
-Drop a `.task.md` file in `inbox/`:
+**Easiest:** use the dashboard **Submit Task** tab at `http://localhost:5000` — fill in type, priority, description, and optional expected output, then click Submit.
+
+**Programmatically:** drop a `.task.md` file in `inbox/`:
 
 ```markdown
 ---
@@ -134,10 +138,15 @@ The orchestrator picks it up within 1 minute, decomposes it, and routes subtasks
 
 ## Monitoring
 
-- **Dashboard:** `http://localhost:5000` — real-time task status, agent stats, live logs
+- **Dashboard:** `http://localhost:5000` — real-time task status, agent stats, live logs, approve/reject claude-code tasks
 - **Task flow:** `inbox/` → `processing/` → workers → `validation/` → `outbox/` (or `failed/`)
-- **Logs:** `logs/<agent>/general.log`
-- **Pending claude-code tasks:** `agents/claude-code/pending/` — manually move to `agents/claude-code/inbox/` to approve
+- **Logs:** `logs/<agent>/general.log` | token usage: `logs/<agent>/tokens.jsonl`
+- **Pending claude-code tasks:** appear in the dashboard **Approvals** tab with Approve / Reject buttons; or manually move from `agents/claude-code/pending/` to `agents/claude-code/inbox/`
+
+## Known Bugs
+
+- **`agent_qa.py` — `task_id` not in scope in `review_with_llm()`:** Lines 192, 258, 262 call `log_tokens(AGENT_NAME, task_id, ...)` but `task_id` is not a parameter of that function and is not defined locally — will raise `NameError` on every QA review. Fix: pass `task_id` as a parameter to `review_with_llm()`.
+- **`dashboard/static/dashboard.js` — `showNotification()` undefined:** Called 6 times in the approve/reject handlers but never defined — will throw a JavaScript `ReferenceError` when approving or rejecting tasks from the dashboard. Fix: add a `showNotification(message, type)` function.
 
 ## Potential Extensions
 

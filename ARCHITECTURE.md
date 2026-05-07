@@ -91,7 +91,8 @@ AI Team/
   scripts/
     shared/
       task_io.py               ← task file I/O: read/write/move, dependency resolution, validation grouping
-      ollama_client.py         ← Ollama REST wrapper: chat() and chat_with_tools()
+      ollama_client.py         ← Ollama REST wrapper: chat() and chat_with_tools(); stores last_token_counts after each call
+      token_logger.py          ← appends {ts, task_id, prompt, completion} to logs/<agent>/tokens.jsonl
       web_search.py            ← DuckDuckGo search wrapper (research + QA agents)
       logger.py                ← file + stdout logging, UTC timestamps
       config.py                ← config.json loader (ProjectConfig class)
@@ -174,7 +175,13 @@ Workers never write directly to `outbox/`. They write their result file to `outb
 
 ## Claude Code — Approval Gate
 
-Tasks the orchestrator routes to `claude-code` go to `agents/claude-code/pending/` (not `inbox/`) until João manually moves or approves them. This prevents unattended claude CLI invocations. Once moved to `agents/claude-code/inbox/`, the agent picks them up on its next 3-minute poll.
+Tasks the orchestrator routes to `claude-code` go to `agents/claude-code/pending/` (not `inbox/`) until approved. This prevents unattended claude CLI invocations.
+
+**Via dashboard:** the **Approvals** tab lists all pending tasks with Approve and Reject buttons. Approve moves the file to `agents/claude-code/inbox/`; Reject moves it to `failed/` with the rejection reason appended.
+
+**Manually:** move the `.task.md` file from `agents/claude-code/pending/` to `agents/claude-code/inbox/`.
+
+Once in `agents/claude-code/inbox/`, the agent picks it up on its next 3-minute poll.
 
 ## QA Loop
 
@@ -187,6 +194,16 @@ All code tasks automatically chain through QA:
 4. **PASS** → writes approval to `outbox/`, moves task to `validation/`.
 5. **FAIL, retry_count=0** → creates new coder task with QA feedback, `retry_count=1`.
 6. **FAIL, retry_count=1** → writes failure report to `failed/`, moves task to `validation/`.
+
+## Token Logging
+
+After every successful Ollama call, each agent logs token usage to `logs/<agent>/tokens.jsonl`:
+
+```json
+{"ts": "2026-05-07T10:00:01Z", "task_id": "task_20260507_...", "prompt": 312, "completion": 87}
+```
+
+Helper: `scripts/shared/token_logger.py` — `log_tokens(agent_name, task_id, prompt_tokens, completion_tokens)`. The log is append-only; it accumulates across all runs. The dashboard **Agent Stats** tab reads these files and displays cumulative `Prompt Tokens`, `Completion Tokens`, and `LLM Calls` per agent. `claude-code` always shows `—` (no Ollama calls).
 
 ## Ollama API
 
@@ -246,11 +263,15 @@ REST endpoints:
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/status` | System metrics (pending/processing/completed/failed counts, agent stats) |
+| `GET /api/status` | System metrics (pending/processing/completed/failed/awaiting_approval counts) |
 | `GET /api/tasks` | All tasks; optional `?status=` and `?type=` filters |
 | `GET /api/tasks/<id>` | Full task detail with logs and result preview |
-| `GET /api/agents` | Per-agent completion and error counts |
+| `GET /api/agents` | Per-agent stats: completed, errors, prompt_tokens, completion_tokens, llm_calls |
 | `GET /api/agents/<name>/logs` | Last N log lines for an agent |
+| `GET /api/pending-approvals` | Tasks waiting in `agents/claude-code/pending/` |
+| `POST /api/pending-approvals/<id>/approve` | Move task to `agents/claude-code/inbox/` |
+| `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
+| `POST /api/tasks/submit` | Create a task in `inbox/` directly from the dashboard |
 
 See `DASHBOARD.md` for full API docs, configuration, and troubleshooting.
 
