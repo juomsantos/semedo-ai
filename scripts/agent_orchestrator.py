@@ -280,6 +280,26 @@ Evaluate these results and decide if the work is complete. You have {max_iterati
     return decision
 
 
+def recover_orphaned_tasks(log: AgentLogger):
+    """
+    Move any tasks stuck in processing/ with status:pending back to inbox/
+    so they can be re-dispatched. These are tasks the orchestrator started
+    but never finished decomposing (e.g. killed mid-LLM-call).
+    """
+    processing_dir = PROJECT_ROOT / "processing"
+    if not processing_dir.exists():
+        return
+    for task_file in processing_dir.glob("*.task.md"):
+        try:
+            task = read_task(task_file)
+            if task["meta"].get("status") == "pending":
+                dest = INBOX / task_file.name
+                task_file.rename(dest)
+                log.warning(f"Recovered orphaned task {task_file.name} → inbox/")
+        except Exception as e:
+            log.error(f"Error inspecting {task_file.name} during recovery: {e}")
+
+
 def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     """Route or decompose a single task."""
     task_id = task["meta"].get("id", "unknown")
@@ -374,8 +394,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         write_result(str(coder_path), coder_body, meta=coder_task["meta"])
         log.info(f"Wired dependency: coder {coder_path.name} depends on research {research_path.name}")
 
-    mark_completed(task_path)
-    log.info(f"Task {task_id} dispatched successfully")
+    log.info(f"Task {task_id} dispatched — awaiting subtask completion in validation loop")
 
 
 def handle_validation_decision(parent_task_id: str, decision: dict, client: OllamaClient, log: AgentLogger):
@@ -484,6 +503,8 @@ def main():
     if not acquire_lock(log):
         return  # Another instance is running — exit cleanly
     atexit.register(release_lock)  # Ensure lock is released on any exit
+
+    recover_orphaned_tasks(log)
 
     client = OllamaClient()
 

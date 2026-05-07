@@ -266,7 +266,7 @@ Please review this code and determine if it correctly solves the task."""
         if "VERDICT: PASS" in response.upper():
             return {"verdict": "PASS", "feedback": ""}
         elif "VERDICT: FAIL" in response.upper():
-            feedback_match = re.search(r"FEEDBACK:\s*(.*?)(?:\n|$)", response, re.DOTALL)
+            feedback_match = re.search(r"FEEDBACK:\s*(.*)", response, re.DOTALL)
             feedback = feedback_match.group(1).strip() if feedback_match else "Review failed but no specific feedback provided"
             return {"verdict": "FAIL", "feedback": feedback}
         else:

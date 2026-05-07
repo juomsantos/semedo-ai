@@ -13,6 +13,9 @@ Press Ctrl+C to gracefully shut down.
 import subprocess
 import sys
 import time
+import platform
+import shutil
+import importlib.util
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Thread, Event
@@ -80,11 +83,22 @@ class AgentScheduler:
 
         try:
             self.log.info(f"Starting {script}")
+
+            # Isolate subprocess from the scheduler's console signal group so that
+            # a Ctrl+C or SIGINT reaching the scheduler does not propagate to agents
+            # mid-LLM-call (which would orphan tasks in processing/).
+            kwargs = {}
+            if platform.system() == "Windows":
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                kwargs["start_new_session"] = True
+
             result = subprocess.run(
                 [sys.executable, str(script_path)],
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout
+                **kwargs,
             )
 
             if result.returncode == 0:
@@ -122,14 +136,33 @@ class AgentScheduler:
         print("\n" + "="*60)
         print("AI Team Scheduler — Initializing")
         print("="*60)
-        
+
         if not self._check_ollama_availability():
             msg = "\n⚠ WARNING: Scheduler starting without Ollama connection.\n  Agents will fail until Ollama is available.\n"
             self.log.warning(msg)
             print(msg)
         else:
             print()  # Newline after success message
-        
+
+        # Flush .pyc caches for the scripts directory so agents always import fresh source
+        for pycache in (SCRIPTS_DIR).rglob("__pycache__"):
+            shutil.rmtree(pycache, ignore_errors=True)
+        self.log.info("Flushed __pycache__ directories")
+
+        # Health-check import of shared.task_io — if it fails, log the error and abort
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "task_io_check", SCRIPTS_DIR / "shared" / "task_io.py"
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            self.log.info("Health check: shared/task_io.py imports cleanly")
+        except Exception as e:
+            msg = f"FATAL: shared/task_io.py failed to import: {e}. Fix the file before starting agents."
+            self.log.error(msg)
+            print(msg)
+            return  # Abort — do not start agents
+
         try:
             self._schedule_agents()
         except KeyboardInterrupt:
