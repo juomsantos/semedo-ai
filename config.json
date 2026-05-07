@@ -1,7 +1,7 @@
 {
   "ollama": {
     "base_url": "http://192.168.1.13:11434",
-    "timeout": 120
+    "timeout": 240
   },
   "agents": {
     "orchestrator": {

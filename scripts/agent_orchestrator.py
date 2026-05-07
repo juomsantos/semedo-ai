@@ -212,7 +212,13 @@ def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, clie
         break
 
     if not parent_path:
-        log.error(f"Cannot find parent task {parent_task_id} — skipping validation")
+        log.error(f"Cannot find parent task {parent_task_id} — moving orphaned subtasks to failed/")
+        for subtask in completed_subtasks:
+            try:
+                mark_failed(subtask["path"])
+                log.warning(f"Moved orphaned subtask {Path(subtask['path']).name} to failed/ (parent {parent_task_id} not found)")
+            except Exception as e:
+                log.error(f"Failed to move orphaned subtask to failed/: {e}")
         return None
 
     parent_task = read_task(parent_path)
@@ -393,6 +399,16 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         from shared.task_io import write_result
         write_result(str(coder_path), coder_body, meta=coder_task["meta"])
         log.info(f"Wired dependency: coder {coder_path.name} depends on research {research_path.name}")
+
+    # Update parent task status to "dispatched" so orphan recovery does not
+    # re-dispatch it on the next cycle (recover_orphaned_tasks checks status=="pending")
+    try:
+        parent_task = read_task(task_path)
+        parent_task["meta"]["status"] = "dispatched"
+        write_result(str(task_path), parent_task["body"], meta=parent_task["meta"])
+        log.info(f"Parent task {task_id} status updated to 'dispatched'")
+    except Exception as e:
+        log.error(f"Failed to update parent task status for {task_id}: {e}")
 
     log.info(f"Task {task_id} dispatched — awaiting subtask completion in validation loop")
 
