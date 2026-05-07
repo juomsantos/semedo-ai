@@ -40,6 +40,10 @@ from shared.task_io import (
     mark_completed,
     mark_failed,
     create_task_file,
+    resolve_task_dependencies,
+    list_validation_tasks,
+    get_completed_subtasks_by_parent,
+    write_result,
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
@@ -95,6 +99,7 @@ def release_lock():
 
 
 SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "orchestrator" / "system_prompt.md"
+VALIDATION_PROMPT_PATH = PROJECT_ROOT / "agents" / "orchestrator" / "validation_system_prompt.md"
 
 WORKER_INBOXES = {
     "coder": PROJECT_ROOT / "agents" / "coder" / "inbox",
@@ -106,6 +111,10 @@ WORKER_INBOXES = {
 
 def load_system_prompt() -> str:
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def load_validation_prompt() -> str:
+    return VALIDATION_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def parse_routing_decision(response: str) -> list[dict]:
@@ -158,6 +167,117 @@ def parse_routing_decision(response: str) -> list[dict]:
     return data
 
 
+def parse_validation_decision(response: str) -> dict:
+    """
+    Parse the orchestrator's validation decision.
+    Expected format is a JSON object with:
+    {
+      "decision": "complete|refine|additional_work|redo",
+      "reasoning": "...",
+      "follow_ups": [...]  # Only if decision != "complete"
+    }
+    """
+    import re
+
+    json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', response, re.DOTALL)
+    json_str = json_match.group(1) if json_match else response.strip()
+
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse validation JSON: {e}")
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+    decision = data.get("decision")
+    valid_decisions = {"complete", "refine", "additional_work", "redo"}
+    if decision not in valid_decisions:
+        raise ValueError(f"Invalid decision '{decision}' (valid: {valid_decisions})")
+
+    return data
+
+
+def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, client: OllamaClient, log: AgentLogger):
+    """
+    Call orchestrator LLM to validate completed subtasks.
+    Returns decision: "complete", "refine", "additional_work", or "redo"
+    """
+    # Read original parent task from processing/ or outbox/
+    processing_dir = PROJECT_ROOT / "processing"
+    parent_path = None
+    for candidate in processing_dir.glob(f"{parent_task_id}.task.md"):
+        parent_path = candidate
+        break
+
+    if not parent_path:
+        log.error(f"Cannot find parent task {parent_task_id} — skipping validation")
+        return None
+
+    parent_task = read_task(parent_path)
+
+    # Build validation prompt with parent task + completed results
+    validation_prompt = load_validation_prompt()
+
+    # Format completed subtasks with their results
+    subtask_results = []
+    for subtask in completed_subtasks:
+        task_id = subtask["meta"].get("id")
+        task_type = subtask["meta"].get("type")
+        output_path = subtask["meta"].get("output_path")
+
+        # Read the actual result if it exists
+        result_content = ""
+        if output_path and Path(output_path).exists():
+            result_content = Path(output_path).read_text(encoding="utf-8")[:1000]  # First 1000 chars
+
+        subtask_results.append({
+            "task_id": task_id,
+            "type": task_type,
+            "assigned_to": subtask["meta"].get("assigned_to"),
+            "body_preview": subtask["body"][:300],
+            "result_preview": result_content,
+        })
+
+    # Iteration count (for loop prevention)
+    iteration = parent_task["meta"].get("iteration", 1)
+    max_iterations = 5
+
+    if iteration >= max_iterations:
+        log.warning(f"Task {parent_task_id} reached max iterations ({max_iterations}) — forcing completion")
+        return {
+            "decision": "complete",
+            "reasoning": f"Max iterations ({max_iterations}) reached. Completing task to prevent infinite loop."
+        }
+
+    user_message = f"""## Parent Task
+ID: {parent_task_id}
+Type: {parent_task['meta'].get('type')}
+Description:
+{parent_task['body']}
+
+## Completed Subtasks (Iteration {iteration}/{max_iterations})
+{json.dumps(subtask_results, indent=2)}
+
+Evaluate these results and decide if the work is complete. You have {max_iterations - iteration} iteration(s) remaining."""
+
+    try:
+        response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=user_message)
+        log.info(f"Validation response received ({len(response)} chars)")
+    except OllamaError as e:
+        log.error(f"Ollama error during validation of {parent_task_id}: {e}")
+        return None
+
+    try:
+        decision = parse_validation_decision(response)
+    except Exception as e:
+        log.error(f"Failed to parse validation decision for {parent_task_id}: {e}")
+        log.error(f"Raw response: {response[:500]}")
+        return None
+
+    return decision
+
+
 def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     """Route or decompose a single task."""
     task_id = task["meta"].get("id", "unknown")
@@ -188,9 +308,12 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         mark_failed(task_path)
         return
 
+    # Track created subtasks to build dependency graph
+    created_subtasks = {}
+
     for subtask in subtasks:
         worker = subtask["worker"]
-        
+
         # Handle pending_approval routing target
         if worker == "pending_approval":
             pending_inbox = PROJECT_ROOT / "agents" / "claude-code" / "pending"
@@ -202,11 +325,11 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
                 expected_output=subtask["expected_output"],
                 assigned_to="pending_approval",
                 created_by=AGENT_NAME,
-                status="pending_approval",
+                parent_task_id=task_id,
             )
             log.info(f"Created pending task {new_task_path.name} → pending_approval")
             continue
-        
+
         inbox = WORKER_INBOXES.get(worker)
         if not inbox:
             log.error(f"Unknown worker '{worker}' in routing decision — skipping subtask")
@@ -225,13 +348,131 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
             created_by=AGENT_NAME,
             chain_to=chain_to,
             original_description=original_description,
+            parent_task_id=task_id,
         )
+
+        # Track subtask for dependency wiring
+        created_subtasks[worker] = new_task_path
         log.info(f"Created subtask {new_task_path.name} → {worker}")
 
-    # TODO: Track parent-child task relationships for completion rollup
-    # For now, mark original task as completed once subtasks are dispatched
+    # Wire dependencies: if both research and code tasks exist, code depends on research
+    if "research" in created_subtasks and "coder" in created_subtasks:
+        research_path = created_subtasks["research"]
+        coder_path = created_subtasks["coder"]
+        research_task = read_task(research_path)
+
+        # Read the coder task and add research output as dependency
+        coder_task = read_task(coder_path)
+        coder_task["meta"]["depends_on"] = [research_task["meta"]["id"]]
+
+        # Re-write coder task with dependency info
+        coder_body = coder_task["body"]
+        from shared.task_io import write_result
+        write_result(str(coder_path), coder_body, meta=coder_task["meta"])
+        log.info(f"Wired dependency: coder {coder_path.name} depends on research {research_path.name}")
+
     mark_completed(task_path)
     log.info(f"Task {task_id} dispatched successfully")
+
+
+def handle_validation_decision(parent_task_id: str, decision: dict, client: OllamaClient, log: AgentLogger):
+    """
+    Process the validation decision:
+    - "complete": Mark parent task as complete
+    - "refine"/"additional_work": Create follow-up tasks
+    - "redo": Create new subtasks with failure context
+    """
+    decision_type = decision.get("decision")
+    reasoning = decision.get("reasoning", "No reasoning provided")
+
+    log.info(f"Validation decision for {parent_task_id}: {decision_type}")
+    log.info(f"Reasoning: {reasoning}")
+
+    # Get current iteration from parent task
+    processing_dir = PROJECT_ROOT / "processing"
+    parent_path = None
+    for candidate in processing_dir.glob(f"{parent_task_id}.task.md"):
+        parent_path = candidate
+        break
+
+    current_iteration = 1
+    if parent_path:
+        parent_task = read_task(parent_path)
+        current_iteration = parent_task["meta"].get("iteration", 1)
+
+    # Handle follow-up task creation if needed
+    follow_ups = decision.get("follow_ups", [])
+    if follow_ups:
+        log.info(f"Creating {len(follow_ups)} follow-up task(s) for iteration {current_iteration + 1}")
+        for idx, followup in enumerate(follow_ups):
+            worker = followup.get("worker")
+            inbox = WORKER_INBOXES.get(worker)
+            if not inbox:
+                log.error(f"Unknown worker '{worker}' in follow-up — skipping")
+                continue
+
+            chain_to = "qa" if followup.get("type") == "code" else None
+            new_task_path = create_task_file(
+                inbox_path=inbox,
+                task_type=followup.get("type"),
+                description=followup.get("description"),
+                expected_output=followup.get("expected_output"),
+                assigned_to=worker,
+                created_by=AGENT_NAME,
+                parent_task_id=parent_task_id,
+                chain_to=chain_to,
+            )
+            # Note: iteration gets incremented in parent task metadata when it re-enters validation
+            log.info(f"Created follow-up task {new_task_path.name} → {worker}")
+
+    if decision_type == "complete":
+        # Mark parent task as truly complete (move from processing to outbox)
+        processing_dir = PROJECT_ROOT / "processing"
+        parent_path = None
+        for candidate in processing_dir.glob(f"{parent_task_id}.task.md"):
+            parent_path = candidate
+            break
+
+        if parent_path and parent_path.exists():
+            mark_completed(parent_path)
+            log.info(f"Task {parent_task_id} APPROVED and marked complete")
+
+    elif decision_type in ["refine", "additional_work", "redo"]:
+        # Follow-ups have been created; update parent's iteration counter and keep in processing
+        if parent_path and parent_path.exists():
+            parent_task = read_task(parent_path)
+            current_iter = parent_task["meta"].get("iteration", 1)
+            parent_task["meta"]["iteration"] = current_iter + 1
+            parent_task["meta"]["last_validation"] = decision_type
+            # Update the parent task file with new iteration
+            write_result(str(parent_path), parent_task["body"], meta=parent_task["meta"])
+            log.info(f"Task {parent_task_id} iteration incremented to {current_iter + 1}")
+
+        log.info(f"Task {parent_task_id} needs more work — follow-ups created, awaiting next iteration")
+
+
+def validation_phase(client: OllamaClient, log: AgentLogger):
+    """
+    Validate all completed subtasks waiting in the validation folder.
+    Group by parent task and call orchestrator LLM to decide: complete or create follow-ups.
+    """
+    validation_dir = PROJECT_ROOT / "validation"
+    if not validation_dir.exists():
+        return
+
+    grouped = get_completed_subtasks_by_parent(validation_dir)
+    if not grouped:
+        log.info("No tasks awaiting validation")
+        return
+
+    log.info(f"Found {len(grouped)} parent task(s) with completed subtasks awaiting validation")
+
+    for parent_task_id, completed_subtasks in grouped.items():
+        log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
+
+        decision = validate_completed_tasks(parent_task_id, completed_subtasks, client, log)
+        if decision:
+            handle_validation_decision(parent_task_id, decision, client, log)
 
 
 def main():
@@ -247,6 +488,23 @@ def main():
         log.error(f"Ollama is not reachable at {client.base_url} — aborting")
         sys.exit(1)
 
+    # Phase 1: Validate completed tasks
+    log.info("=== VALIDATION PHASE ===")
+    validation_phase(client, log)
+
+    # Phase 2: Resolve pending task dependencies
+    agent_inboxes = {
+        "coder": PROJECT_ROOT / "agents" / "coder" / "inbox",
+        "research": PROJECT_ROOT / "agents" / "research" / "inbox",
+        "claude-code": PROJECT_ROOT / "agents" / "claude-code" / "inbox",
+        "qa": PROJECT_ROOT / "agents" / "qa" / "inbox",
+    }
+    log.info("=== DEPENDENCY RESOLUTION PHASE ===")
+    resolve_task_dependencies(agent_inboxes)
+    log.info("Dependency resolution complete")
+
+    # Phase 3: Decompose and dispatch new tasks
+    log.info("=== DISPATCH PHASE ===")
     tasks = list_pending_tasks(INBOX)
     if not tasks:
         log.info("Inbox empty — nothing to do")

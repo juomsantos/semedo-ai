@@ -20,7 +20,7 @@ from shared.task_io import (
     read_task,
     write_result,
     mark_processing,
-    mark_completed,
+    mark_awaiting_validation,
     mark_failed,
     create_task_file,
     PROJECT_ROOT,
@@ -42,6 +42,12 @@ def load_system_prompt() -> str:
 
 def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     task_id = task["meta"].get("id", "unknown")
+
+    # Skip tasks with unresolved dependencies
+    if task["meta"].get("depends_on"):
+        log.info(f"Skipping task {task_id} — unresolved dependencies: {task['meta']['depends_on']}")
+        return
+
     log.info(f"Processing task {task_id}")
 
     task_path = mark_processing(task["path"])
@@ -90,8 +96,8 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         )
         log.info("Chained to QA agent")
 
-    mark_completed(task_path)
-    log.info(f"Task {task_id} complete -> {output_path}")
+    mark_awaiting_validation(task_path)
+    log.info(f"Task {task_id} complete -> {output_path} (awaiting validation)")
 
 
 def main():

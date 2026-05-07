@@ -24,7 +24,7 @@ from shared.task_io import (
     read_task,
     write_result,
     mark_processing,
-    mark_completed,
+    mark_awaiting_validation,
     mark_failed,
     PROJECT_ROOT,
 )
@@ -206,8 +206,8 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         output_path = str(PROJECT_ROOT / "outbox" / f"{task_id}_result.md")
 
     write_result(output_path, response, meta={"task_id": task_id, "agent": AGENT_NAME, "model": MODEL})
-    mark_completed(task_path)
-    log.info(f"Task {task_id} complete → {output_path}")
+    mark_awaiting_validation(task_path)
+    log.info(f"Task {task_id} complete → {output_path} (awaiting validation)")
 
 
 def main():

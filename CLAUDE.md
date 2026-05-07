@@ -2,9 +2,11 @@
 
 This project is a fully implemented multi-agent AI coordination system. Agents communicate through a shared filesystem, polled on a schedule via `scripts/scheduler.py`. A real-time web dashboard is available at `http://localhost:5000`. See `ARCHITECTURE.md` for the full design, `IMPLEMENTATION_COMPLETE.md` for a summary of what was built, and `DASHBOARD.md` for dashboard usage.
 
-## Current Status: Fully Implemented ✓
+## Current Status: Fully Implemented with Validation Loop ✓
 
-All agents are built, tested end-to-end, and running. The system is in maintenance/extension mode.
+All agents are built, tested end-to-end, and running with **orchestrator validation loop** enabled. The orchestrator now continuously validates all completed work and decides whether to accept, refine, or request additional work until tasks meet requirements.
+
+**New:** See [ORCHESTRATOR_VALIDATION_LOOP.md](ORCHESTRATOR_VALIDATION_LOOP.md) for validation architecture, and [RESEARCH_CODER_HANDOFF.md](RESEARCH_CODER_HANDOFF.md) for task dependency wiring.
 
 ## What's Running
 
@@ -36,22 +38,27 @@ A three-tier multi-agent system:
 
 ```
 AI Team/
-  CLAUDE.md                    ← you are here
-  ARCHITECTURE.md              ← full design doc
-  IMPLEMENTATION_COMPLETE.md   ← what was built and how
-  DASHBOARD.md                 ← dashboard usage and API reference
-  ai-team-architecture.drawio  ← system topology diagram
-  ai-team-message-flows.drawio ← message flow / QA loop diagram
-  config.json                  ← centralized config (Ollama URL, models, dashboard port)
-  RUN_SCHEDULER.bat            ← Windows quick-start (agents only)
+  CLAUDE.md                           ← you are here
+  ARCHITECTURE.md                     ← full design doc
+  IMPLEMENTATION_COMPLETE.md          ← what was built and how
+  DASHBOARD.md                        ← dashboard usage and API reference
+  ORCHESTRATOR_VALIDATION_LOOP.md     ← validation architecture & workflow
+  RESEARCH_CODER_HANDOFF.md           ← task dependencies & context passing
+  ai-team-architecture.drawio         ← system topology diagram
+  ai-team-message-flows.drawio        ← message flow / QA loop diagram
+  config.json                         ← centralized config (Ollama URL, models, dashboard port)
+  RUN_SCHEDULER.bat                   ← Windows quick-start (agents only)
   requirements.txt
-  inbox/                       ← drop .task.md files here to submit work
-  processing/                  ← tasks in flight (+ orchestrator.lock)
-  outbox/                      ← completed results
-  failed/                      ← QA failure reports + errored tasks
-  context/                     ← optional shared context files for tasks
+  inbox/                              ← drop .task.md files here to submit work
+  processing/                         ← parent tasks in validation loop (+ orchestrator.lock)
+  validation/                         ← completed subtasks awaiting orchestrator validation
+  outbox/                             ← approved & completed results
+  failed/                             ← QA failure reports + errored tasks
+  context/                            ← optional shared context files for tasks
   agents/
-    orchestrator/system_prompt.md
+    orchestrator/
+      system_prompt.md                ← decomposition prompt
+      validation_system_prompt.md     ← validation decision prompt
     coder/
       inbox/
       system_prompt.md
@@ -63,23 +70,23 @@ AI Team/
     qa/
       inbox/
       system_prompt.md
-  dashboard/                   ← real-time web monitoring UI
-    app.py                     ← Flask REST API server
-    run_dashboard.py           ← launcher (reads config.json)
-    task_monitor.py            ← filesystem scanner
-    templates/index.html       ← dashboard UI
-    static/dashboard.js        ← frontend polling logic
-    static/dashboard.css       ← styling
-    README.md                  ← dashboard-specific docs
-  logs/                        ← per-agent logs at logs/<agent>/general.log
+  dashboard/                          ← real-time web monitoring UI
+    app.py                            ← Flask REST API server
+    run_dashboard.py                  ← launcher (reads config.json)
+    task_monitor.py                   ← filesystem scanner
+    templates/index.html              ← dashboard UI
+    static/dashboard.js               ← frontend polling logic
+    static/dashboard.css              ← styling
+    README.md                         ← dashboard-specific docs
+  logs/                               ← per-agent logs at logs/<agent>/general.log
   scripts/
     shared/
-      task_io.py               ← task file I/O helpers
-      ollama_client.py         ← Ollama REST wrapper (chat + chat_with_tools)
-      web_search.py            ← DuckDuckGo search wrapper (used by research agent)
-      logger.py                ← UTF-8-safe logger
-      config.py                ← config.json loader (ProjectConfig class)
-    agent_orchestrator.py
+      task_io.py                      ← task file I/O helpers
+      ollama_client.py                ← Ollama REST wrapper (chat + chat_with_tools)
+      web_search.py                   ← DuckDuckGo search wrapper (used by research agent)
+      logger.py                       ← UTF-8-safe logger (now with correct UTC timestamps)
+      config.py                       ← config.json loader (ProjectConfig class)
+    agent_orchestrator.py             ← now with validation loop (3 phases)
     agent_coder.py
     agent_research.py
     agent_claude_code.py

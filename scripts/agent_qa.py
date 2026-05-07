@@ -26,7 +26,7 @@ from shared.task_io import (
     read_task,
     write_result,
     mark_processing,
-    mark_completed,
+    mark_awaiting_validation,
     mark_failed,
     create_task_file,
     PROJECT_ROOT,
@@ -421,12 +421,12 @@ This code is ready for production.
 """
 
         write_result(output_path, qa_result, meta={"task_id": task_id, "agent": AGENT_NAME, "verdict": "PASS"})
-        mark_completed(task_path)
-        log.info(f"Task {task_id} passed QA → {output_path}")
+        mark_awaiting_validation(task_path)
+        log.info(f"Task {task_id} passed QA → {output_path} (awaiting validation)")
     else:
         handle_failure(task, review["feedback"], code, execution, log)
-        mark_completed(task_path)
-        log.info(f"Task {task_id} failed QA → handled")
+        mark_awaiting_validation(task_path)
+        log.info(f"Task {task_id} failed QA → handled (awaiting validation)")
 
 
 def main():

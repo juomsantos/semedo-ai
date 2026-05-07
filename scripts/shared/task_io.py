@@ -52,6 +52,11 @@ def mark_processing(task_path):
     return move_task(task_path, get_folder("processing"))
 
 
+def mark_awaiting_validation(task_path):
+    """Move task to validation folder (awaiting orchestrator approval)."""
+    return move_task(task_path, get_folder("validation"))
+
+
 def mark_completed(task_path):
     return move_task(task_path, get_folder("outbox"))
 
@@ -77,6 +82,8 @@ def create_task_file(
     chain_to=None,
     retry_count=0,
     original_description=None,
+    parent_task_id=None,
+    depends_on=None,
 ):
     task_id = generate_task_id()
     output_path = str(get_folder("outbox") / f"{task_id}_result.md")
@@ -99,6 +106,10 @@ def create_task_file(
         meta["retry_count"] = retry_count
     if original_description is not None:
         meta["original_description"] = original_description
+    if parent_task_id is not None:
+        meta["parent_task_id"] = parent_task_id
+    if depends_on is not None:
+        meta["depends_on"] = depends_on
 
     body = f"## Task Description\n\n{description}\n\n## Expected Output\n\n{expected_output}"
     post = frontmatter.Post(body, **meta)
@@ -109,3 +120,76 @@ def create_task_file(
     task_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
     return task_path
+
+
+def list_validation_tasks(validation_path=None):
+    """List all tasks awaiting orchestrator validation."""
+    if validation_path is None:
+        validation_path = get_folder("validation")
+    validation = Path(validation_path)
+    return sorted(validation.glob("*.task.md")) if validation.exists() else []
+
+
+def get_completed_subtasks_by_parent(validation_path=None):
+    """
+    Group completed subtasks by parent_task_id.
+    Returns: dict of {parent_task_id: [task1, task2, ...]}
+    """
+    validation_tasks = list_validation_tasks(validation_path)
+    grouped = {}
+
+    for task_path in validation_tasks:
+        task = read_task(task_path)
+        parent_id = task["meta"].get("parent_task_id")
+        if parent_id:
+            if parent_id not in grouped:
+                grouped[parent_id] = []
+            grouped[parent_id].append(task)
+
+    return grouped
+
+
+def resolve_task_dependencies(inboxes_dict: dict) -> None:
+    """
+    Scan all agent inboxes for tasks with unresolved dependencies.
+    If a dependency is completed (in outbox), add its output to context_files
+    and remove the depends_on field.
+
+    Args:
+        inboxes_dict: dict mapping agent name to inbox path
+            e.g. {"coder": PROJECT_ROOT / "agents/coder/inbox", ...}
+    """
+    outbox = get_folder("outbox")
+
+    for agent_name, inbox_path in inboxes_dict.items():
+        pending_tasks = list_pending_tasks(inbox_path)
+
+        for task_path in pending_tasks:
+            task = read_task(task_path)
+            depends_on = task["meta"].get("depends_on", [])
+
+            if not depends_on:
+                continue  # No dependencies
+
+            all_resolved = True
+            resolved_outputs = []
+
+            for dep_task_id in depends_on:
+                # Look for completed dependency task in outbox
+                dep_output_path = outbox / f"{dep_task_id}_result.md"
+                if dep_output_path.exists():
+                    resolved_outputs.append(str(dep_output_path))
+                else:
+                    all_resolved = False
+                    break
+
+            if all_resolved:
+                # All dependencies resolved — update task and remove blocking
+                task["meta"]["context_files"] = list(set(
+                    task["meta"].get("context_files", []) + resolved_outputs
+                ))
+                del task["meta"]["depends_on"]
+
+                # Re-write task with updated context
+                body = task["body"]
+                write_result(str(task_path), body, meta=task["meta"])
