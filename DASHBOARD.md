@@ -57,7 +57,7 @@ View all tasks currently being processed by agents. Shows task ID, type, priorit
 ### Approvals Tab
 Shows all tasks in `agents/claude-code/pending/` — tasks the orchestrator routed to claude-code that require manual approval before running. A badge on the tab shows the count when tasks are waiting.
 
-Each task card shows the full task body plus **Approve** and **Reject** buttons:
+Click a task card to open a detail modal showing all metadata fields (type, priority, created_by, etc.) and the full task body. Each task card also has **Approve** and **Reject** buttons:
 - **Approve** — moves the task to `agents/claude-code/inbox/`; the claude-code agent picks it up on its next poll
 - **Reject** — prompts for a rejection reason, then moves the task to `failed/` with the reason appended
 
@@ -82,7 +82,7 @@ Per-agent statistics showing:
 `claude-code` shows `—` in token columns (it uses the Claude CLI, not Ollama directly).
 
 ### Logs Tab
-View agent execution logs. Select any agent (orchestrator, coder, research, qa, claude-code, scheduler). Shows last 50 log lines, auto-scrolls to bottom on update.
+View agent execution logs. Select any agent (orchestrator, coder, research, qa, claude-code, scheduler). Shows last 50 log lines in **newest-first** order — most recent entry at the top.
 
 ### Submit Task Tab
 Submit a new task to the orchestrator directly from the dashboard without touching the filesystem.

@@ -42,14 +42,27 @@ CLAUDE_TIMEOUT = _config.agent_timeout(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "claude-code" / "inbox"
 
 
+# Preamble injected at the front of every prompt to prevent the CLI from
+# attempting filesystem writes or requesting permissions in non-interactive mode.
+_PIPELINE_PREAMBLE = (
+    "You are processing a task submitted by an automated pipeline. "
+    "Write your complete response as plain text in this reply — "
+    "do NOT attempt to write files, use filesystem tools, or ask for "
+    "permission to perform any action. Your full response will be "
+    "automatically captured and saved by the pipeline.\n\n"
+    "---\n\n"
+)
+
+
 def invoke_claude_code(task_body: str, log: AgentLogger) -> str:
     """
     Run `claude --print -p <prompt>` and return stdout.
     Raises subprocess.CalledProcessError on non-zero exit.
     """
     log.info("Invoking Claude Code CLI...")
+    prompt = _PIPELINE_PREAMBLE + task_body
     result = subprocess.run(
-        ["claude", "--print", "-p", task_body],
+        ["claude", "--print", "-p", prompt],
         capture_output=True,
         text=True,
         timeout=CLAUDE_TIMEOUT,

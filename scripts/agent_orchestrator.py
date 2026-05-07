@@ -213,6 +213,24 @@ def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, clie
         break
 
     if not parent_path:
+        # Before declaring orphan, check outbox/ — parent may have already completed
+        outbox_candidate = PROJECT_ROOT / "outbox" / f"{parent_task_id}.task.md"
+        if outbox_candidate.exists():
+            try:
+                parent_meta = read_task(outbox_candidate)["meta"]
+            except Exception:
+                parent_meta = {}
+            if parent_meta.get("status") == "complete":
+                # Parent finished (e.g. force-completed before restart) — subtasks are
+                # stale but not failures.  Move them to outbox/ so the dashboard doesn't
+                # show them as failed.
+                for subtask in completed_subtasks:
+                    try:
+                        move_task(subtask["path"], PROJECT_ROOT / "outbox")
+                        log.info(f"Stale subtask {Path(subtask['path']).name} moved to outbox/ (parent {parent_task_id} already complete)")
+                    except Exception as e:
+                        log.error(f"Failed to move stale subtask to outbox/: {e}")
+                return None
         log.error(f"Cannot find parent task {parent_task_id} — moving orphaned subtasks to failed/")
         for subtask in completed_subtasks:
             try:
@@ -353,7 +371,11 @@ def recover_stalled_subtasks(log: AgentLogger):
             parent_path = processing_dir / f"{parent_task_id}.task.md"
 
             if not parent_path.exists():
-                log.debug(f"Parent {parent_task_id} not found in processing/ for failed subtask {subtask_file.name} — orphaned")
+                # If parent is already in outbox (completed), this subtask is simply
+                # stale — not a stall.  Skip silently to avoid N10 log noise.
+                outbox_parent = PROJECT_ROOT / "outbox" / f"{parent_task_id}.task.md"
+                if not outbox_parent.exists():
+                    log.debug(f"Parent {parent_task_id} not found anywhere for failed subtask {subtask_file.name} — skipping")
                 continue
 
             # Group by parent

@@ -501,7 +501,7 @@ class TaskMonitor:
                     new_lines.append(line)
             
             new_frontmatter = "\n".join(new_lines)
-            new_content = f"{new_frontmatter}\n---\n{body}"
+            new_content = f"---\n{new_frontmatter}\n---\n{body}"
             
             # Create inbox directory if needed
             inbox = self.agents_dir / "claude-code" / "inbox"

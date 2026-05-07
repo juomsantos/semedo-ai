@@ -1,6 +1,6 @@
 # AI Team — Multi-Agent Architecture
 
-> Last updated: 2026-05-07 (post-bug-fix-batch-2)
+> Last updated: 2026-05-07 (post-bug-fix-batch-3)
 
 ## Overview
 
@@ -159,7 +159,7 @@ Every minute the orchestrator runs three phases in sequence:
 
 Maximum 5 iterations per parent task; forced `complete` at the limit to prevent infinite loops.
 
-If a subtask in `validation/` references a parent task that no longer exists in `processing/`, it is moved to `failed/` with a note (rather than silently skipped), preventing unbounded growth of `validation/`.
+If a subtask in `validation/` references a parent task that no longer exists in `processing/`, the orchestrator checks `outbox/` before acting: if the parent is there with `status: complete` (e.g. force-completed before a scheduler restart), the subtask is moved to `outbox/` rather than `failed/`. Only if the parent is missing from both locations is the subtask moved to `failed/`.
 
 **Phase 2 — Dependency resolution.** Scans all worker inboxes for tasks with a `depends_on` field. For each, checks whether the dependency's result file exists in `outbox/`. If all dependencies are resolved, it wires the result paths into `context_files` and removes `depends_on`, unblocking the task.
 
@@ -226,15 +226,22 @@ Returns `{"type": "text", ...}` or `{"type": "tool_call", "name": "web_search", 
 
 ## Claude Code Worker
 
+Every prompt is prefixed with `_PIPELINE_PREAMBLE` before being passed to the CLI:
+
 ```python
-subprocess.run(["claude", "--print", "-p", task_content], capture_output=True, text=True)
+prompt = _PIPELINE_PREAMBLE + task_body
+subprocess.run(["claude", "--print", "-p", prompt], capture_output=True, text=True)
 ```
+
+The preamble instructs the agent to write its complete response as plain text in stdout — not to attempt filesystem writes, use tools, or request permissions. Without this, the CLI running non-interactively may emit a permission-request string instead of the actual output when it infers the task expects a file write.
 
 ## Concurrency
 
 The orchestrator uses a lockfile (`processing/orchestrator.lock`) to prevent concurrent instances. Stale locks (dead PID) are cleaned up automatically on the next run.
 
 **Orphan recovery.** At startup (before Phase 1), the orchestrator scans `processing/` for any `.task.md` file with `status: pending`. These are tasks that were moved to `processing/` by `mark_processing()` but whose decomposition never completed — typically because the process was killed mid-LLM-call. They are moved back to `inbox/` and logged as warnings so they re-enter the pipeline on the next cycle. Tasks with `status: processing` (intentionally placed there by the validation loop) are not touched.
+
+When the validation phase encounters a subtask whose parent is no longer in `processing/`, it checks `outbox/` before marking the subtask as failed. If the parent is in `outbox/` with `status: complete` — as happens when a parent was force-completed just before a scheduler restart — the subtask is moved to `outbox/` instead. This prevents legitimate completed work from appearing as failures in the dashboard.
 
 **SIGINT isolation.** Each agent subprocess is spawned with `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP` on Windows or `start_new_session=True` on Unix. This isolates agent processes from the scheduler's console signal group, so pressing Ctrl+C in the scheduler terminal stops the scheduler gracefully without propagating the signal to any in-flight agent LLM call.
 

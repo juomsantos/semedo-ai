@@ -6,6 +6,7 @@ const POLL_INTERVAL = 1500; // 1.5 seconds
 
 let pollTimer = null;
 let lastUpdate = new Date();
+let approvalsCache = {}; // taskId → full task object, populated by updateApprovals
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -149,8 +150,12 @@ async function updateApprovals() {
             return;
         }
         
+        // Cache task objects so the detail modal can read full metadata
+        approvalsCache = {};
+        data.tasks.forEach(task => { approvalsCache[task.id] = task; });
+
         container.innerHTML = data.tasks.map(task => createApprovalTaskElement(task)).join('');
-        
+
         // Add click handlers
         container.querySelectorAll('.task-item').forEach(el => {
             el.addEventListener('click', () => showApprovalDetail(el.dataset.taskId));
@@ -190,49 +195,48 @@ function createApprovalTaskElement(task) {
     `;
 }
 
-// Show approval detail modal
-async function showApprovalDetail(taskId) {
-    try {
-        const response = await fetch(`/api/pending-approvals/${taskId}`);
-        const task = await response.json();
-        
-        const modal = document.getElementById('task-modal');
-        const title = document.getElementById('modal-title');
-        const body = document.getElementById('modal-body');
-        
-        title.textContent = `Task: ${task.id} (Awaiting Approval)`;
-        
-        let html = `
-            <div class="task-detail">
-                <div class="detail-section">
-                    <h4>Metadata</h4>
-                    <div class="detail-grid">
-                        <div><strong>Type:</strong> ${task.type}</div>
-                        <div><strong>Priority:</strong> ${task.priority}</div>
-                        <div><strong>Status:</strong> ${task.status}</div>
-                        <div><strong>Location:</strong> ${task.location}</div>
-                        <div><strong>Created by:</strong> ${task.created_by}</div>
-                        <div><strong>Assigned to:</strong> ${task.assigned_to}</div>
-                        <div><strong>Created at:</strong> ${task.created_at}</div>
-                        <div><strong>Age:</strong> ${formatAge(task.age_seconds)}</div>
-                    </div>
-                </div>
-                <div class="detail-section">
-                    <h4>Task Description</h4>
-                    <pre class="detail-result">${escapeHtml(task.body)}</pre>
-                </div>
-                <div class="detail-actions">
-                    <button class="btn btn-success" onclick="approveTask('${task.id}')">Approve Task</button>
-                    <button class="btn btn-danger" onclick="rejectTask('${task.id}')">Reject Task</button>
+// Show approval detail modal — uses approvalsCache populated by updateApprovals
+function showApprovalDetail(taskId) {
+    const task = approvalsCache[taskId];
+    if (!task) {
+        console.error('Approval task not found in cache:', taskId);
+        return;
+    }
+
+    const modal = document.getElementById('task-modal');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+
+    title.textContent = `Task: ${task.id} (Awaiting Approval)`;
+
+    const html = `
+        <div class="task-detail">
+            <div class="detail-section">
+                <h4>Metadata</h4>
+                <div class="detail-grid">
+                    <div><strong>Type:</strong> ${task.type || '—'}</div>
+                    <div><strong>Priority:</strong> ${task.priority || '—'}</div>
+                    <div><strong>Status:</strong> ${task.status || '—'}</div>
+                    <div><strong>Location:</strong> ${task.location || '—'}</div>
+                    <div><strong>Created by:</strong> ${task.created_by || '—'}</div>
+                    <div><strong>Assigned to:</strong> ${task.assigned_to || '—'}</div>
+                    <div><strong>Created at:</strong> ${task.created_at || '—'}</div>
+                    <div><strong>Age:</strong> ${formatAge(task.age_seconds)}</div>
                 </div>
             </div>
-        `;
-        
-        body.innerHTML = html;
-        modal.classList.add('show');
-    } catch (error) {
-        console.error('Error loading task detail:', error);
-    }
+            <div class="detail-section">
+                <h4>Task Description</h4>
+                <pre class="detail-result">${escapeHtml(task.body || '')}</pre>
+            </div>
+            <div class="detail-actions">
+                <button class="btn btn-success" onclick="approveTask('${task.id}')">Approve Task</button>
+                <button class="btn btn-danger" onclick="rejectTask('${task.id}')">Reject Task</button>
+            </div>
+        </div>
+    `;
+
+    body.innerHTML = html;
+    modal.classList.add('show');
 }
 
 // Approve task
@@ -391,12 +395,12 @@ async function updateLogs(agent) {
             return;
         }
 
-        container.innerHTML = data.logs.map(log => `
+        container.innerHTML = [...data.logs].reverse().map(log => `
             <div class="log-entry">${escapeHtml(log)}</div>
         `).join('');
 
-        // Auto-scroll to bottom
-        container.parentElement.scrollTop = container.parentElement.scrollHeight;
+        // Latest entries are now at the top — scroll to top
+        container.parentElement.scrollTop = 0;
     } catch (error) {
         console.error('Error updating logs:', error);
         const container = document.getElementById('logs-list');
