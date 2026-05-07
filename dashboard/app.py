@@ -143,6 +143,16 @@ def reject_task(task_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/results/<agent>")
+def get_results(agent):
+    """Get completed and failed results for a specific agent."""
+    try:
+        results = monitor.get_results_by_agent(agent)
+        return jsonify(results), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/tasks/submit", methods=["POST"])
 def submit_task():
     """Submit a new task to the orchestrator."""

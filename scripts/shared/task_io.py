@@ -49,7 +49,11 @@ def move_task(task_path, destination_folder):
 
 
 def mark_processing(task_path):
-    return move_task(task_path, get_folder("processing"))
+    new_path = move_task(task_path, get_folder("processing"))
+    # Update status to "processing" so recover_orphaned_tasks doesn't re-dispatch it
+    task = read_task(new_path)
+    task["meta"]["status"] = "processing"
+    return write_result(str(new_path), task["body"], meta=task["meta"])
 
 
 def mark_awaiting_validation(task_path):
@@ -171,12 +175,24 @@ def resolve_task_dependencies(inboxes_dict: dict) -> None:
             resolved_outputs = []
 
             for dep_task_id in depends_on:
-                dep_output_path = outbox / f"{dep_task_id}_result.md"
-                if dep_output_path.exists():
-                    resolved_outputs.append(str(dep_output_path))
+                # Read completed task metadata to get its actual output_path
+                dep_task_path = outbox / f"{dep_task_id}.task.md"
+                if dep_task_path.exists():
+                    dep_task = read_task(dep_task_path)
+                    output_path = dep_task["meta"].get("output_path")
+                    if output_path and Path(output_path).exists():
+                        resolved_outputs.append(output_path)
+                    else:
+                        all_resolved = False
+                        break
                 else:
-                    all_resolved = False
-                    break
+                    # Fallback: check for result file with standard naming
+                    dep_output_path = outbox / f"{dep_task_id}_result.md"
+                    if dep_output_path.exists():
+                        resolved_outputs.append(str(dep_output_path))
+                    else:
+                        all_resolved = False
+                        break
 
             if all_resolved:
                 task["meta"]["context_files"] = list(set(

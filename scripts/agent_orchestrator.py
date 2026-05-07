@@ -152,7 +152,7 @@ def parse_routing_decision(response: str) -> list[dict]:
         raise ValueError("Routing decision array is empty")
 
     # Validate each subtask
-    valid_workers = {"coder", "research", "claude-code"}
+    valid_workers = {"coder", "research", "claude-code", "pending_approval"}
     for i, subtask in enumerate(data):
         if not isinstance(subtask, dict):
             raise ValueError(f"Subtask {i} is not a dict: {type(subtask).__name__}")
@@ -396,7 +396,6 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
         # Re-write coder task with dependency info
         coder_body = coder_task["body"]
-        from shared.task_io import write_result
         write_result(str(coder_path), coder_body, meta=coder_task["meta"])
         log.info(f"Wired dependency: coder {coder_path.name} depends on research {research_path.name}")
 

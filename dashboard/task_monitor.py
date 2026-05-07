@@ -554,3 +554,69 @@ class TaskMonitor:
             return all_lines[-lines:] if len(all_lines) > lines else all_lines
         except Exception:
             return []
+
+    def get_results_by_agent(self, agent: str = "orchestrator") -> Dict[str, Any]:
+        """
+        Get completed and failed task results grouped by agent.
+        Returns: {
+            "agent": "orchestrator",
+            "completed": [{"id": "...", "type": "...", "output": "....", "created_at": "..."}, ...],
+            "failed": [...]
+        }
+        """
+        completed_tasks = []
+        failed_tasks = []
+
+        # Scan outbox for completed tasks by this agent
+        if self.outbox.exists():
+            for task_file in sorted(self.outbox.glob("*.task.md"), reverse=True):
+                task = self._parse_task_file(task_file, "completed", "outbox")
+                if task and (task.get("assigned_to") == agent or (agent == "orchestrator" and task.get("assigned_to") == "orchestrator")):
+                    # Try to read the result file
+                    task_id = task["id"]
+                    result_file = self.outbox / f"{task_id}_result.md"
+                    output = ""
+                    if result_file.exists():
+                        try:
+                            output = result_file.read_text(encoding="utf-8")[:2000]  # First 2000 chars
+                        except Exception:
+                            pass
+
+                    completed_tasks.append({
+                        "id": task_id,
+                        "type": task["type"],
+                        "created_at": task["created_at"],
+                        "priority": task["priority"],
+                        "output": output,
+                        "body_preview": task["body_preview"],
+                    })
+
+        # Scan failed for failed tasks by this agent
+        if self.failed.exists():
+            for task_file in sorted(self.failed.glob("*.task.md"), reverse=True):
+                task = self._parse_task_file(task_file, "failed", "failed")
+                if task and (task.get("assigned_to") == agent or (agent == "orchestrator" and task.get("assigned_to") == "orchestrator")):
+                    # Try to read the result file
+                    task_id = task["id"]
+                    result_file = self.failed / f"{task_id}_result.md"
+                    output = ""
+                    if result_file.exists():
+                        try:
+                            output = result_file.read_text(encoding="utf-8")[:2000]
+                        except Exception:
+                            pass
+
+                    failed_tasks.append({
+                        "id": task_id,
+                        "type": task["type"],
+                        "created_at": task["created_at"],
+                        "priority": task["priority"],
+                        "output": output,
+                        "body_preview": task["body_preview"],
+                    })
+
+        return {
+            "agent": agent,
+            "completed": completed_tasks[:50],  # Limit to last 50
+            "failed": failed_tasks[:50],
+        }
