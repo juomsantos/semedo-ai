@@ -1,6 +1,6 @@
 # AI Team — Multi-Agent Architecture
 
-> Last updated: 2026-05-07 (post-bug-fix-batch-1)
+> Last updated: 2026-05-07 (post-bug-fix-batch-2)
 
 ## Overview
 
@@ -114,7 +114,7 @@ priority: high|medium|low
 created_by: claude-cowork|orchestrator|coder|qa
 created_at: 2026-05-07T10:00:00
 assigned_to: orchestrator|coder|research|claude-code|qa|pending_approval
-status: pending
+status: pending|dispatched|processing   ← pending=awaiting orchestrator; dispatched=subtasks created, waiting validation; processing=worker running it
 output_path: outbox/task_..._result.md
 context_files: []             ← populated by dependency resolver when deps complete
 parent_task_id: task_...      ← links subtask back to original parent (set by orchestrator)
@@ -159,9 +159,11 @@ Every minute the orchestrator runs three phases in sequence:
 
 Maximum 5 iterations per parent task; forced `complete` at the limit to prevent infinite loops.
 
+If a subtask in `validation/` references a parent task that no longer exists in `processing/`, it is moved to `failed/` with a note (rather than silently skipped), preventing unbounded growth of `validation/`.
+
 **Phase 2 — Dependency resolution.** Scans all worker inboxes for tasks with a `depends_on` field. For each, checks whether the dependency's result file exists in `outbox/`. If all dependencies are resolved, it wires the result paths into `context_files` and removes `depends_on`, unblocking the task.
 
-**Phase 3 — Dispatch.** Reads new parent tasks from `inbox/`, calls the decomposition LLM (`system_prompt.md`), creates subtasks in worker inboxes, and moves the parent to `processing/`. When research and coder subtasks are created together, the coder task is automatically given `depends_on: [research_task_id]` so it waits for the research output before running.
+**Phase 3 — Dispatch.** Reads new parent tasks from `inbox/`, calls the decomposition LLM (`system_prompt.md`), creates subtasks in worker inboxes, and moves the parent to `processing/` with `status: dispatched`. The `dispatched` status prevents orphan recovery from re-queueing the parent on subsequent cycles. When research and coder subtasks are created together, the coder task is automatically given `depends_on: [research_task_id]` so it waits for the research output before running. Ollama timeout is set to 240s (`config.json`) to accommodate complex decomposition calls.
 
 ## Task Flow
 
