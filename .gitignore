@@ -7,7 +7,7 @@ inbox/
 processing/
 outbox/
 failed/
-validation/
+
 
 # Python
 __pycache__/
