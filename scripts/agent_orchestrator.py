@@ -44,6 +44,7 @@ from shared.task_io import (
     list_validation_tasks,
     get_completed_subtasks_by_parent,
     write_result,
+    move_task,
     PROJECT_ROOT,
 )
 from shared.token_logger import log_tokens
@@ -306,6 +307,126 @@ def recover_orphaned_tasks(log: AgentLogger):
             log.error(f"Error inspecting {task_file.name} during recovery: {e}")
 
 
+def recover_stalled_subtasks(log: AgentLogger):
+    """
+    Recover failed subtasks from Ollama timeouts.
+
+    When a worker hits the 240s Ollama timeout, it calls mark_failed() which moves
+    the subtask to failed/. The orchestrator's validation loop only monitors validation/,
+    so the parent task never gets notified of the failure and sits in processing/ forever.
+
+    This function:
+    1. Scans failed/ for .task.md files (subtask files, not QA failure reports)
+    2. For each failed subtask, checks if its parent is stalled in processing/
+    3. If parent exists and hasn't exceeded max retries, retries the subtask
+    4. If parent has exhausted retries, fails the entire parent task
+    """
+    MAX_STALL_RETRIES = 2
+
+    failed_dir = PROJECT_ROOT / "failed"
+    if not failed_dir.exists():
+        return
+
+    # Collect all failed subtasks grouped by parent
+    failed_subtasks_by_parent = {}
+
+    for subtask_file in failed_dir.glob("*.task.md"):
+        try:
+            subtask = read_task(subtask_file)
+            parent_task_id = subtask["meta"].get("parent_task_id")
+
+            if not parent_task_id:
+                log.warning(f"Failed subtask {subtask_file.name} has no parent_task_id — skipping")
+                continue
+
+            # Check if parent exists in processing/
+            processing_dir = PROJECT_ROOT / "processing"
+            parent_path = processing_dir / f"{parent_task_id}.task.md"
+
+            if not parent_path.exists():
+                log.debug(f"Parent {parent_task_id} not found in processing/ for failed subtask {subtask_file.name} — orphaned")
+                continue
+
+            # Group by parent
+            if parent_task_id not in failed_subtasks_by_parent:
+                failed_subtasks_by_parent[parent_task_id] = {
+                    "parent_path": parent_path,
+                    "subtasks": []
+                }
+            failed_subtasks_by_parent[parent_task_id]["subtasks"].append({
+                "file": subtask_file,
+                "data": subtask
+            })
+        except Exception as e:
+            log.error(f"Error reading failed subtask {subtask_file.name}: {e}")
+
+    # Process each parent group
+    for parent_task_id, group in failed_subtasks_by_parent.items():
+        parent_path = group["parent_path"]
+        failed_subtasks = group["subtasks"]
+
+        try:
+            parent_task = read_task(parent_path)
+            stall_retry_count = parent_task["meta"].get("stall_retry_count", 0)
+
+            if stall_retry_count >= MAX_STALL_RETRIES:
+                # Max retries exhausted — fail the parent task
+                log.warning(f"Stall recovery: parent {parent_task_id} exhausted {MAX_STALL_RETRIES} stall retries — marking failed")
+
+                # Write failure report
+                failure_report = f"""# Stall Recovery — Max Retries Exhausted
+
+Task {parent_task_id} had the following subtasks fail with Ollama timeouts:
+
+"""
+                for subtask_info in failed_subtasks:
+                    subtask_id = subtask_info["data"]["meta"].get("id", "unknown")
+                    failure_report += f"- {subtask_id}\n"
+
+                failure_report += f"""
+
+After {MAX_STALL_RETRIES} retries, the subtasks continue to fail. The parent task is being marked as failed.
+"""
+                outbox_dir = PROJECT_ROOT / "outbox"
+                outbox_dir.mkdir(parents=True, exist_ok=True)
+                output_path = str(outbox_dir / f"{parent_task_id}_result.md")
+                write_result(output_path, failure_report, meta={"task_id": parent_task_id, "status": "failed"})
+
+                # Move parent to failed/
+                mark_failed(parent_path)
+                log.info(f"Parent task {parent_task_id} moved to failed/")
+
+            else:
+                # Retry the subtasks
+                for subtask_info in failed_subtasks:
+                    subtask_file = subtask_info["file"]
+                    subtask_data = subtask_info["data"]
+
+                    # Reset subtask status to pending
+                    subtask_data["meta"]["status"] = "pending"
+                    write_result(str(subtask_file), subtask_data["body"], meta=subtask_data["meta"])
+
+                    # Get worker inbox
+                    assigned_to = subtask_data["meta"].get("assigned_to")
+                    inbox_path = WORKER_INBOXES.get(assigned_to)
+
+                    if not inbox_path:
+                        log.error(f"Unknown worker '{assigned_to}' for subtask {subtask_file.name}")
+                        continue
+
+                    # Move to worker inbox
+                    move_task(subtask_file, inbox_path)
+                    log.info(f"Stall recovery: retrying subtask {subtask_file.name} → {assigned_to} (attempt {stall_retry_count + 1}/{MAX_STALL_RETRIES})")
+
+                # Increment stall_retry_count on parent (only once per group, not per subtask)
+                parent_task["meta"]["stall_retry_count"] = stall_retry_count + 1
+                write_result(str(parent_path), parent_task["body"], meta=parent_task["meta"])
+                log.info(f"Parent {parent_task_id} stall_retry_count incremented to {stall_retry_count + 1}")
+
+        except Exception as e:
+            log.error(f"Error processing stalled parent {parent_task_id}: {e}")
+
+
 def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     """Route or decompose a single task."""
     task_id = task["meta"].get("id", "unknown")
@@ -547,6 +668,7 @@ def main():
     atexit.register(release_lock)  # Ensure lock is released on any exit
 
     recover_orphaned_tasks(log)
+    recover_stalled_subtasks(log)
 
     client = OllamaClient()
 
