@@ -16,6 +16,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import io
+import time
 
 # Ensure stdout uses UTF-8 encoding on all platforms
 if sys.stdout.encoding != 'utf-8':
@@ -33,7 +34,7 @@ class AgentLogger:
         self.log_file = self.log_dir / f"{task_id}.log"
 
     def _write(self, level: str, message: str):
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts = datetime.fromtimestamp(time.time(), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         line = f"[{ts}] [{level}] [{self.agent_name}] {message}"
         print(line, file=sys.stdout)
         with self.log_file.open("a", encoding="utf-8") as f:

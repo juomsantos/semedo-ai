@@ -61,7 +61,8 @@ def mark_failed(task_path):
 
 
 def generate_task_id():
-    return f"task_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    now = datetime.utcnow()
+    return f"task_{now.strftime('%Y%m%d_%H%M%S')}_{now.microsecond:06d}"
 
 
 def create_task_file(

@@ -13,7 +13,7 @@ Press Ctrl+C to gracefully shut down.
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Thread, Event
 
@@ -65,7 +65,7 @@ class AgentScheduler:
 
     def _init_schedules(self):
         """Initialize next run times for all agents."""
-        now = datetime.now()
+        now = datetime.fromtimestamp(time.time(), tz=timezone.utc)
         for script, interval in AGENTS:
             # First run after a small delay to avoid thundering herd
             self.next_run_times[script] = now + timedelta(seconds=5)
@@ -104,7 +104,7 @@ class AgentScheduler:
         self.log.info("Scheduler started")
 
         while not self.stop_event.wait(1):  # Check every second
-            now = datetime.now()
+            now = datetime.fromtimestamp(time.time(), tz=timezone.utc)
 
             for script, interval in AGENTS:
                 if now >= self.next_run_times[script]:
