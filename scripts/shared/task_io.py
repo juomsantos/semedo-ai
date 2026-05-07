@@ -63,7 +63,10 @@ def mark_awaiting_validation(task_path):
 
 
 def mark_completed(task_path):
-    return move_task(task_path, get_folder("outbox"))
+    new_path = move_task(task_path, get_folder("outbox"))
+    task = read_task(new_path)
+    task["meta"]["status"] = "complete"
+    return write_result(str(new_path), task["body"], meta=task["meta"])
 
 
 def mark_failed(task_path):
