@@ -135,7 +135,7 @@ def execute_code(code: str, log: AgentLogger) -> dict:
 
 
 def review_with_llm(
-    task_description: str, code: str, execution: dict, client: OllamaClient, log: AgentLogger
+    task_description: str, code: str, execution: dict, client: OllamaClient, log: AgentLogger, task_id: str = "unknown"
 ) -> dict:
     """
     Call qwen3.5:9b to review code with optional web search.
@@ -400,7 +400,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     log.info(f"Code executed: exit_code={execution['exit_code']}, timed_out={execution['timed_out']}")
 
     task_description = task["meta"].get("original_description") or task["body"]
-    review = review_with_llm(task_description, code, execution, client, log)
+    review = review_with_llm(task_description, code, execution, client, log, task_id)
     log.info(f"QA verdict: {review['verdict']}")
 
     if review["verdict"] == "PASS":

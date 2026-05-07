@@ -462,6 +462,26 @@ function showSubmitStatus(message, type) {
     }, 5000);
 }
 
+// Show a transient toast notification
+function showNotification(message, type) {
+    // Remove any existing notification
+    const existing = document.getElementById('toast-notification');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'toast-notification';
+    toast.className = `toast-notification ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // Trigger animation then auto-remove
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
 // Create task element HTML
 function createTaskElement(task) {
     const statusClass = task.status.toLowerCase();
