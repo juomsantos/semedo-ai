@@ -194,8 +194,33 @@ class TaskMonitor:
         
         # Get logs
         task["logs"] = self._get_task_logs(task_id)
-        
+
         return task
+
+    def get_task_payload(self, task_id: str) -> Optional[str]:
+        """Get raw task file content."""
+        # Search in all locations
+        for folder in [
+            self.inbox,
+            self.processing,
+            self.outbox,
+            self.failed,
+            self.claude_code_pending,
+        ]:
+            if folder.exists():
+                task_file = folder / f"{task_id}.task.md"
+                if task_file.exists():
+                    return task_file.read_text(encoding="utf-8")
+
+        # Also search agent inboxes
+        if self.agents_dir.exists():
+            for agent_dir in self.agents_dir.iterdir():
+                agent_inbox = agent_dir / "inbox"
+                task_file = agent_inbox / f"{task_id}.task.md"
+                if task_file.exists():
+                    return task_file.read_text(encoding="utf-8")
+
+        return None
 
     def get_agent_stats(self) -> Dict[str, Any]:
         """Get statistics per agent."""

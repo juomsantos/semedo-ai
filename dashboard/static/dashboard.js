@@ -47,6 +47,9 @@ function setupEventListeners() {
     document.getElementById('task-modal').addEventListener('click', (e) => {
         if (e.target.id === 'task-modal') closeModal();
     });
+    document.getElementById('payload-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'payload-modal') closePayloadModal();
+    });
 }
 
 // Start real-time polling
@@ -627,8 +630,12 @@ async function showTaskDetail(taskId) {
                 </div>
             `;
         }
-        
-        html += '</div>';
+
+        html += `
+            <div class="detail-actions">
+                <button class="btn btn-primary" onclick="showTaskPayload('${task.id}')">View Payload</button>
+            </div>
+        </div>`;
         body.innerHTML = html;
         modal.classList.add('show');
     } catch (error) {
@@ -639,6 +646,35 @@ async function showTaskDetail(taskId) {
 // Close modal
 function closeModal() {
     document.getElementById('task-modal').classList.remove('show');
+}
+
+// Show task payload in modal
+async function showTaskPayload(taskId) {
+    try {
+        const response = await fetch(`/api/tasks/${taskId}/payload`);
+        const data = await response.json();
+
+        if (!data.content) {
+            showNotification('Failed to load task payload', 'error');
+            return;
+        }
+
+        const modal = document.getElementById('payload-modal');
+        const title = document.getElementById('payload-modal-title');
+        const body = document.getElementById('payload-modal-body');
+
+        title.textContent = `Task Payload: ${taskId}`;
+        body.innerHTML = `<pre class="payload-content">${escapeHtml(data.content)}</pre>`;
+        modal.classList.add('show');
+    } catch (error) {
+        console.error('Error loading task payload:', error);
+        showNotification('Error loading task payload', 'error');
+    }
+}
+
+// Close payload modal
+function closePayloadModal() {
+    document.getElementById('payload-modal').classList.remove('show');
 }
 
 // Switch tabs

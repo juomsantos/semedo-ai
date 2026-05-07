@@ -237,7 +237,16 @@ def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, clie
         # Read the actual result if it exists
         result_content = ""
         if output_path and Path(output_path).exists():
-            result_content = Path(output_path).read_text(encoding="utf-8")[:1000]  # First 1000 chars
+            MAX_RESULT_CHARS = 256000  # ~64k tokens at ~4 chars/token
+            raw = Path(output_path).read_text(encoding="utf-8")
+            if len(raw) > MAX_RESULT_CHARS:
+                result_content = raw[:MAX_RESULT_CHARS] + (
+                    f"\n\n[TRUNCATED — showing first {MAX_RESULT_CHARS} of {len(raw)} chars. "
+                    f"The full result is present on disk; this preview ends mid-content. "
+                    f"Do NOT request more work solely because this preview is cut off.]"
+                )
+            else:
+                result_content = raw
 
         subtask_results.append({
             "task_id": task_id,

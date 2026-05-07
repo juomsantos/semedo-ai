@@ -80,8 +80,21 @@ def get_task_detail(task_id):
         task = monitor.get_task_detail(task_id)
         if not task:
             return jsonify({"error": f"Task {task_id} not found"}), 404
-        
+
         return jsonify(task), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tasks/<task_id>/payload")
+def get_task_payload(task_id):
+    """Get raw task file content."""
+    try:
+        payload = monitor.get_task_payload(task_id)
+        if not payload:
+            return jsonify({"error": f"Task {task_id} not found"}), 404
+
+        return jsonify({"id": task_id, "content": payload}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

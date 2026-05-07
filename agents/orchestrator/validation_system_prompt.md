@@ -85,6 +85,14 @@ For each completed subtask, evaluate:
 - ✓ Are there gaps or missing pieces?
 - ✓ Would a user accept this as a final deliverable?
 
+## Truncated Results
+
+Some result previews end with `[TRUNCATED — showing first N of M chars ...]`. This means the full output exists on disk and was successfully produced — only the preview is cut off. When you see this marker:
+- Judge the work based on what IS visible
+- If the visible content is well-formed and addresses the requirements, choose `complete`
+- Do NOT request additional_work or redo solely because the preview was cut off
+- Only request more work if the visible portion reveals an actual content gap (missing sections, wrong approach, etc.)
+
 ## Loop Prevention
 
 - Maximum iterations: 5 (if iteration_count == 5, you MUST choose either COMPLETE or REDO)
