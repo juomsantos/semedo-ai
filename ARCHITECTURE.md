@@ -1,6 +1,6 @@
 # AI Team — Multi-Agent Architecture
 
-> Last updated: 2026-05-07
+> Last updated: 2026-05-07 (post-bug-fix-batch-1)
 
 ## Overview
 
@@ -14,7 +14,7 @@ A team of agents coordinated through this shared folder. Agents poll their inbox
         ▼
    inbox/
         │
-        ▼  polls every 1 min — 3 phases per run
+        ▼  polls every 3 min — 3 phases per run
 [Orchestrator: qwen3.5:9b]
    Phase 1 — VALIDATION: scan validation/, group by parent, LLM decides complete|refine|additional_work|redo
    Phase 2 — DEPENDENCY RESOLUTION: unblock tasks whose depends_on are satisfied, wire context_files
@@ -138,7 +138,7 @@ All scripts live in `scripts/`. Each is standalone and invoked by the scheduler.
 
 | Script | Model | Inbox | Interval | Notes |
 |---|---|---|---|---|
-| `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 1 min | 3-phase loop per run |
+| `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 3 min | 3-phase loop per run |
 | `agent_coder.py` | qwen2.5-coder:7b | `agents/coder/inbox/` | 2 min | skips tasks with unresolved `depends_on` |
 | `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 2 min | web search via DuckDuckGo (max 5 searches/task) |
 | `agent_claude_code.py` | Claude Code CLI | `agents/claude-code/inbox/` | 3 min | tasks arrive via manual approval from `pending/` |
@@ -232,6 +232,10 @@ subprocess.run(["claude", "--print", "-p", task_content], capture_output=True, t
 
 The orchestrator uses a lockfile (`processing/orchestrator.lock`) to prevent concurrent instances. Stale locks (dead PID) are cleaned up automatically on the next run.
 
+**Orphan recovery.** At startup (before Phase 1), the orchestrator scans `processing/` for any `.task.md` file with `status: pending`. These are tasks that were moved to `processing/` by `mark_processing()` but whose decomposition never completed — typically because the process was killed mid-LLM-call. They are moved back to `inbox/` and logged as warnings so they re-enter the pipeline on the next cycle. Tasks with `status: processing` (intentionally placed there by the validation loop) are not touched.
+
+**SIGINT isolation.** Each agent subprocess is spawned with `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP` on Windows or `start_new_session=True` on Unix. This isolates agent processes from the scheduler's console signal group, so pressing Ctrl+C in the scheduler terminal stops the scheduler gracefully without propagating the signal to any in-flight agent LLM call.
+
 ## Configuration
 
 All runtime settings in `config.json` at the project root, loaded via `scripts/shared/config.py`:
@@ -249,6 +253,20 @@ All runtime settings in `config.json` at the project root, loaded via `scripts/s
   "dashboard": { "port": 5000, "debug": false, "poll_interval": 1500 }
 }
 ```
+
+## Scheduler Startup Sequence
+
+Before spawning any agent subprocesses, `scheduler.py run()` performs two safety checks:
+
+1. **Flush `.pyc` caches** — recursively deletes all `__pycache__` directories under `scripts/` so agents always import fresh source bytecode. Prevents stale cached modules from masking syntax errors in recently edited files.
+
+2. **Health-check import** — test-imports `scripts/shared/task_io.py` using `importlib.util`. If the import fails (syntax error, truncation, etc.) the scheduler logs a `FATAL` error and returns without starting any agents. This provides an early-warning gate against a class of crash that previously allowed one cached orchestrator cycle to succeed before all agents crashed simultaneously.
+
+Both checks run after the Ollama availability check and before `_schedule_agents()`.
+
+## QA Feedback
+
+When QA issues a `FAIL` verdict it creates a retry coder task whose body includes the full `FEEDBACK:` block from the LLM review. The regex `r"FEEDBACK:\s*(.*)"` with `re.DOTALL` captures everything from the `FEEDBACK:` marker to the end of the response, preserving multi-line feedback. The coder receives the complete list of issues rather than a truncated first line.
 
 ## Dashboard
 

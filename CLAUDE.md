@@ -11,7 +11,7 @@ All agents are built and running with a continuous **orchestrator validation loo
 A three-tier multi-agent system:
 
 1. **Claude (Cowork)** — master coordinator, writes tasks to `inbox/`
-2. **Orchestrator** (`qwen3.5:9b`) — polls `inbox/` every 1 min, runs 3 phases per cycle: validate completed work → resolve task dependencies → decompose and dispatch new tasks
+2. **Orchestrator** (`qwen3.5:9b`) — polls `inbox/` every 3 min, runs 3 phases per cycle: validate completed work → resolve task dependencies → decompose and dispatch new tasks
 3. **Workers:**
    - `qwen2.5-coder:7b` (coder) — code generation, polls every 2 min; skips tasks with unresolved dependencies
    - `qwen3.5:9b` (research) — research, summarization, Q&A, polls every 2 min; live web search via DuckDuckGo (up to 5 searches/task)
@@ -27,8 +27,12 @@ A three-tier multi-agent system:
 - **Claude Code worker:** `subprocess.run(["claude", "--print", "-p", task_content])`
 - **Task files** are `.task.md` with YAML frontmatter — see `ARCHITECTURE.md` for full schema
 - **System prompts** stored in `agents/<name>/system_prompt.md` — edit to change agent behaviour without touching code. The orchestrator has two: `system_prompt.md` (decomposition) and `validation_system_prompt.md` (validation decisions)
-- **Validation loop:** workers move completed tasks to `validation/` (not `outbox/`) via `mark_awaiting_validation()`; the orchestrator's Phase 1 reviews them and decides complete/refine/redo/additional_work. Max 5 iterations
+- **Validation loop:** workers move completed tasks to `validation/` (not `outbox/`) via `mark_awaiting_validation()`; the orchestrator's Phase 1 reviews them and decides complete/refine/redo/additional_work. Max 5 iterations. The parent task stays in `processing/` throughout — it is only moved to `outbox/` when the orchestrator issues a `complete` decision.
 - **Task dependencies:** coder tasks automatically get `depends_on: [research_task_id]` when research and code subtasks coexist; the orchestrator's Phase 2 wires the research result into `context_files` once complete, then unblocks the coder task
+- **Orphan recovery:** on every startup, the orchestrator scans `processing/` for tasks with `status: pending` (tasks it started decomposing but never finished, e.g. killed mid-LLM-call) and moves them back to `inbox/` to be re-dispatched. Tasks with `status: processing` (placed there by the validation loop) are left untouched.
+- **SIGINT isolation:** agent subprocesses are spawned with `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP` (Windows) or `start_new_session=True` (Unix) so a Ctrl+C in the scheduler terminal does not propagate to agents mid-LLM-call, preventing task orphaning.
+- **Startup health checks:** before spawning any agents, the scheduler (a) flushes all `__pycache__` directories under `scripts/` so agents always import fresh bytecode, and (b) test-imports `shared/task_io.py` — if it fails to import, the scheduler logs a FATAL error and aborts without starting any agents.
+- **QA feedback:** the `FEEDBACK:` block in QA's LLM response is captured in full (multi-line) using `re.DOTALL`, so retry tasks receive complete actionable feedback rather than a truncated first line.
 - **Task ID uniqueness:** IDs include microseconds (`task_YYYYMMDD_HHMMSS_microseconds`) to prevent collisions when subtasks are created in the same second
 - **Approval gate for claude-code:** orchestrator routes to `pending_approval` which places tasks in `agents/claude-code/pending/`; approve or reject from the dashboard **Approvals** tab (or manually move files)
 - **Token logging:** after every Ollama call, each agent appends `{ts, task_id, prompt, completion}` to `logs/<agent>/tokens.jsonl` via `scripts/shared/token_logger.py`; the dashboard Agent Stats tab shows cumulative totals
