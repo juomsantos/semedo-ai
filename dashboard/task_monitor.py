@@ -218,7 +218,13 @@ class TaskMonitor:
             if agent_logs.exists():
                 try:
                     log_content = agent_logs.read_text(encoding="utf-8", errors="ignore")
-                    completed_count = len(re.findall(r"\[INFO\].*complete", log_content))
+                    # Count tasks actually picked up and processed.
+                    # All agents emit "[INFO] ... Processing task task_<id>" exactly
+                    # once per task, making this a reliable cross-agent signal.
+                    # The old pattern "[INFO].*complete" was matching "Dependency
+                    # resolution complete" (logged every orchestrator cycle) and
+                    # missed QA entirely (which never logs the word "complete").
+                    completed_count = len(re.findall(r"\[INFO\].*Processing task task_", log_content))
                     error_count = len(re.findall(r"\[ERROR\]", log_content))
                 except Exception:
                     pass

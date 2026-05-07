@@ -154,10 +154,6 @@ def resolve_task_dependencies(inboxes_dict: dict) -> None:
     Scan all agent inboxes for tasks with unresolved dependencies.
     If a dependency is completed (in outbox), add its output to context_files
     and remove the depends_on field.
-
-    Args:
-        inboxes_dict: dict mapping agent name to inbox path
-            e.g. {"coder": PROJECT_ROOT / "agents/coder/inbox", ...}
     """
     outbox = get_folder("outbox")
 
@@ -169,13 +165,12 @@ def resolve_task_dependencies(inboxes_dict: dict) -> None:
             depends_on = task["meta"].get("depends_on", [])
 
             if not depends_on:
-                continue  # No dependencies
+                continue
 
             all_resolved = True
             resolved_outputs = []
 
             for dep_task_id in depends_on:
-                # Look for completed dependency task in outbox
                 dep_output_path = outbox / f"{dep_task_id}_result.md"
                 if dep_output_path.exists():
                     resolved_outputs.append(str(dep_output_path))
@@ -184,12 +179,9 @@ def resolve_task_dependencies(inboxes_dict: dict) -> None:
                     break
 
             if all_resolved:
-                # All dependencies resolved — update task and remove blocking
                 task["meta"]["context_files"] = list(set(
                     task["meta"].get("context_files", []) + resolved_outputs
                 ))
                 del task["meta"]["depends_on"]
-
-                # Re-write task with updated context
                 body = task["body"]
                 write_result(str(task_path), body, meta=task["meta"])

@@ -143,11 +143,6 @@ The orchestrator picks it up within 1 minute, decomposes it, and routes subtasks
 - **Logs:** `logs/<agent>/general.log` | token usage: `logs/<agent>/tokens.jsonl`
 - **Pending claude-code tasks:** appear in the dashboard **Approvals** tab with Approve / Reject buttons; or manually move from `agents/claude-code/pending/` to `agents/claude-code/inbox/`
 
-## Known Bugs
-
-- **`agent_qa.py` — `task_id` not in scope in `review_with_llm()`:** Lines 192, 258, 262 call `log_tokens(AGENT_NAME, task_id, ...)` but `task_id` is not a parameter of that function and is not defined locally — will raise `NameError` on every QA review. Fix: pass `task_id` as a parameter to `review_with_llm()`.
-- **`dashboard/static/dashboard.js` — `showNotification()` undefined:** Called 6 times in the approve/reject handlers but never defined — will throw a JavaScript `ReferenceError` when approving or rejecting tasks from the dashboard. Fix: add a `showNotification(message, type)` function.
-
 ## Potential Extensions
 
 1. **Parent-child UI** — dashboard currently shows a flat task list; hierarchy view would help track validation iterations
