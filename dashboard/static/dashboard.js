@@ -31,6 +31,12 @@ function setupEventListeners() {
         updateLogs(e.target.value);
     });
 
+    // Submit task form
+    const submitForm = document.getElementById('submit-task-form');
+    if (submitForm) {
+        submitForm.addEventListener('submit', submitTask);
+    }
+
     // Modal close
     document.querySelector('.modal-close').addEventListener('click', closeModal);
     document.getElementById('task-modal').addEventListener('click', (e) => {
@@ -382,6 +388,78 @@ async function updateLogs(agent) {
         const container = document.getElementById('logs-list');
         container.innerHTML = '<p class="no-data">Error loading logs: ' + error.message + '</p>';
     }
+}
+
+// Submit task form
+async function submitTask(event) {
+    event.preventDefault();
+
+    const form = document.getElementById('submit-task-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const statusDiv = document.getElementById('submit-status');
+    const messageDiv = document.getElementById('submit-message');
+
+    const description = document.getElementById('task-description').value.trim();
+    const type = document.getElementById('task-type').value;
+    const priority = document.getElementById('task-priority').value;
+    const expectedOutput = document.getElementById('task-expected-output').value.trim();
+
+    // Client-side validation
+    if (!description) {
+        showSubmitStatus('Description is required', 'error');
+        return;
+    }
+
+    // Disable button and show loading state
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+
+    try {
+        const response = await fetch('/api/tasks/submit', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                description: description,
+                type: type,
+                priority: priority,
+                expected_output: expectedOutput,
+            }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showSubmitStatus(`Task submitted: ${data.task_id}`, 'success');
+            document.getElementById('task-description').value = '';
+            // Keep type and priority for quick resubmit
+        } else {
+            showSubmitStatus(data.error || 'Failed to submit task', 'error');
+        }
+    } catch (error) {
+        console.error('Error submitting task:', error);
+        showSubmitStatus('Network error: ' + error.message, 'error');
+    } finally {
+        // Re-enable button
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit Task';
+    }
+}
+
+// Show submit status message with auto-hide
+function showSubmitStatus(message, type) {
+    const statusDiv = document.getElementById('submit-status');
+    const messageDiv = document.getElementById('submit-message');
+
+    messageDiv.textContent = message;
+    statusDiv.className = `submit-status ${type}`;
+    statusDiv.style.display = 'block';
+
+    // Auto-hide after 5 seconds
+    setTimeout(() => {
+        statusDiv.style.display = 'none';
+    }, 5000);
 }
 
 // Create task element HTML

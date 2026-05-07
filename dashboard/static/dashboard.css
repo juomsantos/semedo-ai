@@ -551,6 +551,123 @@ body {
     font-family: "Courier New", monospace;
 }
 
+/* Submit Task Form */
+.submit-task-form {
+    max-width: 600px;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a1a2e;
+    margin-bottom: 8px;
+}
+
+.form-select,
+.form-textarea {
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    background: white;
+    color: #333;
+    transition: border-color 0.2s ease;
+}
+
+.form-select:focus,
+.form-textarea:focus {
+    outline: none;
+    border-color: #0066cc;
+    box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+}
+
+.form-textarea {
+    resize: vertical;
+    min-height: 60px;
+}
+
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.btn-submit {
+    background: #0066cc;
+    color: white;
+    padding: 10px 24px;
+}
+
+.btn-submit:hover:not(:disabled) {
+    background: #0052a3;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 102, 204, 0.3);
+}
+
+.btn-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.submit-status {
+    margin-top: 20px;
+    padding: 16px;
+    border-radius: 4px;
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.submit-message {
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.submit-status.success {
+    background: #e8f4ff;
+    border: 1px solid #4facfe;
+    color: #0066cc;
+}
+
+.submit-status.error {
+    background: #ffe8e8;
+    border: 1px solid #fa709a;
+    color: #d32f2f;
+}
+
+.submit-status.success .submit-message::before {
+    content: "✓ ";
+    font-weight: 600;
+}
+
+.submit-status.error .submit-message::before {
+    content: "✗ ";
+    font-weight: 600;
+}
+
 /* Buttons */
 .btn {
     padding: 8px 16px;

@@ -24,6 +24,10 @@ from task_monitor import TaskMonitor
 # Determine project root (parent of dashboard)
 PROJECT_ROOT = dashboard_dir.parent
 
+# Add scripts to path for task_io import
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+from shared.task_io import create_task_file
+
 # Initialize Flask app
 app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)
@@ -139,6 +143,51 @@ def reject_task(task_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/tasks/submit", methods=["POST"])
+def submit_task():
+    """Submit a new task to the orchestrator."""
+    try:
+        body = request.get_json() or {}
+
+        # Validate required fields
+        description = body.get("description", "").strip()
+        if not description:
+            return jsonify({"error": "description is required"}), 400
+
+        task_type = body.get("type", "").strip()
+        valid_types = ["code", "research", "summarize", "review", "plan"]
+        if task_type not in valid_types:
+            return jsonify({"error": f"type must be one of: {', '.join(valid_types)}"}), 400
+
+        priority = body.get("priority", "medium").strip()
+        valid_priorities = ["high", "medium", "low"]
+        if priority not in valid_priorities:
+            return jsonify({"error": f"priority must be one of: {', '.join(valid_priorities)}"}), 400
+
+        expected_output = body.get("expected_output", "").strip()
+        if not expected_output:
+            expected_output = "See task description."
+
+        # Create task file
+        inbox_path = PROJECT_ROOT / "inbox"
+        task_path = create_task_file(
+            inbox_path=inbox_path,
+            task_type=task_type,
+            description=description,
+            expected_output=expected_output,
+            priority=priority,
+            created_by="dashboard",
+            assigned_to="orchestrator",
+        )
+
+        # Extract task ID from path (filename format: {task_id}.task.md)
+        task_id = task_path.stem.replace(".task", "")
+
+        return jsonify({"task_id": task_id, "message": "Task submitted to orchestrator."}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""
@@ -166,8 +215,9 @@ def main(port: int = 5000, debug: bool = False):
     print(f"  GET /api/pending-approvals - Tasks awaiting approval")
     print(f"  POST /api/pending-approvals/<id>/approve - Approve task")
     print(f"  POST /api/pending-approvals/<id>/reject - Reject task")
+    print(f"  POST /api/tasks/submit   - Submit new task")
     print()
-    
+
     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
