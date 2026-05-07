@@ -34,6 +34,7 @@ from shared.task_io import (
 )
 from shared.logger import AgentLogger
 from shared.config import load_config
+from shared.token_logger import log_tokens
 
 AGENT_NAME = "claude-code"
 _config = load_config()
@@ -76,7 +77,7 @@ def process_task(task: dict, log: AgentLogger):
         for cf in context_files:
             cf_path = Path(cf)
             if cf_path.exists():
-                context_parts.append(f"### Context: {cf_path.name}\n\n{cf_path.read_text()}")
+                context_parts.append(f"### Context: {cf_path.name}\n\n{cf_path.read_text(encoding='utf-8')}")
         if context_parts:
             user_message = "\n\n".join(context_parts) + "\n\n---\n\n" + user_message
 
@@ -97,6 +98,7 @@ def process_task(task: dict, log: AgentLogger):
         output_path = str(PROJECT_ROOT / "outbox" / f"{task_id}_result.md")
 
     write_result(output_path, response, meta={"task_id": task_id, "agent": AGENT_NAME})
+    log_tokens(AGENT_NAME, task_id, 0, len(response.split()))  # Approximate token count via word count
     mark_awaiting_validation(task_path)
     log.info(f"Task {task_id} complete → {output_path} (awaiting validation)")
 

@@ -24,7 +24,8 @@ def list_pending_tasks(inbox_path):
 
 def read_task(task_path):
     path = Path(task_path)
-    post = frontmatter.load(str(path))
+    with open(str(path), 'r', encoding='utf-8') as f:
+        post = frontmatter.load(f)
     return {"meta": dict(post.metadata), "body": post.content, "path": path}
 
 

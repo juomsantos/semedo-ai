@@ -471,6 +471,22 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             break
 
         if parent_path and parent_path.exists():
+            # Create a result file with summary of accumulated subtask results
+            outbox_dir = PROJECT_ROOT / "outbox"
+            completed_subtasks = get_completed_subtasks_by_parent(PROJECT_ROOT / "validation")
+            subtasks_for_parent = completed_subtasks.get(parent_task_id, [])
+
+            result_summary = f"# Task Completion Summary\n\nTask {parent_task_id} completed after validation.\n\n## Subtask Results\n\n"
+            for subtask in subtasks_for_parent:
+                task_id = subtask["meta"].get("id", "unknown")
+                task_type = subtask["meta"].get("type", "unknown")
+                result_summary += f"- **{task_id}** ({task_type}): Completed\n"
+
+            result_summary += f"\n## Decision Reasoning\n\n{reasoning}"
+
+            output_path = str(outbox_dir / f"{parent_task_id}_result.md")
+            write_result(output_path, result_summary, meta={"task_id": parent_task_id, "status": "complete"})
+
             mark_completed(parent_path)
             log.info(f"Task {parent_task_id} APPROVED and marked complete")
 

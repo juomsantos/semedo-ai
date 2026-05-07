@@ -180,6 +180,7 @@ Please review this code and determine if it correctly solves the task."""
         # Run tool-calling loop up to MAX_TOOL_TURNS iterations
         tools = [WEB_SEARCH_TOOL]
         response = None
+        empty_response_retries = 0
 
         for turn in range(MAX_TOOL_TURNS):
             result = client.chat_with_tools(
@@ -262,8 +263,25 @@ Please review this code and determine if it correctly solves the task."""
                 log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
                 response = "(No final verdict produced after maximum search iterations.)"
 
+        # Retry logic for empty responses
+        while response and response.strip() == "" and empty_response_retries < 2:
+            empty_response_retries += 1
+            log.warning(f"Received empty response from LLM, retrying ({empty_response_retries}/2)...")
+            messages.append({
+                "role": "user",
+                "content": "Your previous response was empty. Please provide your QA review verdict now.",
+            })
+            result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
+            if result["type"] == "text":
+                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+                response = result["content"]
+                log.info(f"QA review received ({len(response)} chars) on retry {empty_response_retries}")
+
         # Parse verdict and feedback from response
-        if "VERDICT: PASS" in response.upper():
+        if response and response.strip() == "":
+            log.error(f"QA received empty response after {empty_response_retries} retry attempts — defaulting to FAIL")
+            return {"verdict": "FAIL", "feedback": "QA review produced no response after multiple retry attempts"}
+        elif "VERDICT: PASS" in response.upper():
             return {"verdict": "PASS", "feedback": ""}
         elif "VERDICT: FAIL" in response.upper():
             feedback_match = re.search(r"FEEDBACK:\s*(.*)", response, re.DOTALL)

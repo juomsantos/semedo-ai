@@ -189,7 +189,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         for cf in context_files:
             cf_path = Path(cf)
             if cf_path.exists():
-                context_content.append(f"### {cf_path.name}\n\n{cf_path.read_text()}")
+                context_content.append(f"### {cf_path.name}\n\n{cf_path.read_text(encoding='utf-8')}")
         if context_content:
             user_message = "\n\n---\n\n".join(context_content) + "\n\n---\n\n" + user_message
 
