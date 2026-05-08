@@ -51,10 +51,21 @@ def move_task(task_path, destination_folder):
 
 def mark_processing(task_path):
     new_path = move_task(task_path, get_folder("processing"))
-    # Update status to "processing" so recover_orphaned_tasks doesn't re-dispatch it
-    task = read_task(new_path)
-    task["meta"]["status"] = "processing"
-    return write_result(str(new_path), task["body"], meta=task["meta"])
+    # Update status to "processing" so recover_orphaned_tasks doesn't re-dispatch it.
+    # Use string-based replacement to preserve ALL original frontmatter fields.
+    # Avoids python-frontmatter round-trip which can silently drop fields on
+    # Windows paths / datetime values (the N2 bug).
+    import re as _re
+    content = new_path.read_text(encoding="utf-8")
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            new_fm = _re.sub(r"^status:.*", "status: processing", parts[1], flags=_re.MULTILINE)
+            if "status:" not in new_fm:
+                new_fm = new_fm.rstrip("\n") + "\nstatus: processing\n"
+            content = f"---{new_fm}---{parts[2]}"
+            new_path.write_text(content, encoding="utf-8")
+    return new_path
 
 
 def mark_awaiting_validation(task_path):

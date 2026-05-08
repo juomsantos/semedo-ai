@@ -32,11 +32,6 @@ function setupEventListeners() {
         updateLogs(e.target.value);
     });
 
-    // Results agent selection
-    document.getElementById('results-agent-select').addEventListener('change', (e) => {
-        updateResults(e.target.value);
-    });
-
     // Submit task form
     const submitForm = document.getElementById('submit-task-form');
     if (submitForm) {
@@ -97,12 +92,6 @@ async function updateDashboard() {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
             await updateLogs(selectedAgent);
-        }
-
-        // Update results if visible
-        if (document.getElementById('tab-results').classList.contains('active')) {
-            const selectedAgent = document.getElementById('results-agent-select').value || 'orchestrator';
-            await updateResults(selectedAgent);
         }
 
         // Update timestamp
@@ -408,59 +397,6 @@ async function updateLogs(agent) {
     }
 }
 
-// Update results for a specific agent
-async function updateResults(agent) {
-    try {
-        const response = await fetch(`/api/results/${agent}`);
-        const data = await response.json();
-
-        const completedContainer = document.getElementById('results-completed');
-        const failedContainer = document.getElementById('results-failed');
-
-        // Update completed section
-        if (!data.completed || data.completed.length === 0) {
-            completedContainer.innerHTML = '<p class="no-data">No completed tasks</p>';
-        } else {
-            completedContainer.innerHTML = data.completed.map(task => createResultElement(task, 'completed')).join('');
-        }
-
-        // Update failed section
-        if (!data.failed || data.failed.length === 0) {
-            failedContainer.innerHTML = '<p class="no-data">No failed tasks</p>';
-        } else {
-            failedContainer.innerHTML = data.failed.map(task => createResultElement(task, 'failed')).join('');
-        }
-    } catch (error) {
-        console.error('Error updating results:', error);
-        document.getElementById('results-completed').innerHTML = '<p class="no-data">Error loading results</p>';
-        document.getElementById('results-failed').innerHTML = '<p class="no-data">Error loading results</p>';
-    }
-}
-
-// Create result element HTML
-function createResultElement(task, status) {
-    const statusIcon = status === 'completed' ? '✓' : '✗';
-    const statusClass = status === 'completed' ? 'completed' : 'failed';
-
-    return `
-        <div class="result-item ${statusClass}">
-            <div class="result-header">
-                <span class="result-id">${escapeHtml(task.id)}</span>
-                <span class="result-type">${task.type}</span>
-                <span class="result-priority priority-${task.priority}">${task.priority}</span>
-            </div>
-            <div class="result-meta">
-                <span class="result-created">${task.created_at}</span>
-            </div>
-            ${task.output ? `
-                <div class="result-output">
-                    <pre>${escapeHtml(task.output)}</pre>
-                </div>
-            ` : ''}
-        </div>
-    `;
-}
-
 // Submit task form
 async function submitTask(event) {
     event.preventDefault();
@@ -581,15 +517,33 @@ function createTaskElement(task) {
 // Show task detail modal
 async function showTaskDetail(taskId) {
     try {
-        const response = await fetch(`/api/tasks/${taskId}`);
-        const task = await response.json();
-        
+        // Fetch task metadata and payload in parallel
+        const [taskResponse, payloadResponse] = await Promise.all([
+            fetch(`/api/tasks/${taskId}`),
+            fetch(`/api/tasks/${taskId}/payload`),
+        ]);
+        const task = await taskResponse.json();
+        const payloadData = payloadResponse.ok ? await payloadResponse.json() : null;
+
+        // Extract body: prefer full body from API, fall back to parsing payload, then body_preview
+        let taskBody = task.body || '';
+        if (!taskBody && payloadData && payloadData.content) {
+            // Split on the YAML frontmatter boundary (first two --- delimiters)
+            const match = payloadData.content.match(/^---[\s\S]*?---\n?([\s\S]*)$/);
+            if (match) {
+                taskBody = match[1].trim();
+            }
+        }
+        if (!taskBody && task.body_preview) {
+            taskBody = task.body_preview;
+        }
+
         const modal = document.getElementById('task-modal');
         const title = document.getElementById('modal-title');
         const body = document.getElementById('modal-body');
-        
+
         title.textContent = `Task: ${task.id}`;
-        
+
         let html = `
             <div class="task-detail">
                 <div class="detail-section">
@@ -607,7 +561,16 @@ async function showTaskDetail(taskId) {
                     </div>
                 </div>
         `;
-        
+
+        if (taskBody) {
+            html += `
+                <div class="detail-section">
+                    <h4>Task Body</h4>
+                    <pre class="detail-result">${escapeHtml(taskBody)}</pre>
+                </div>
+            `;
+        }
+
         if (task.logs && task.logs.length > 0) {
             html += `
                 <div class="detail-section">
@@ -625,21 +588,17 @@ async function showTaskDetail(taskId) {
                 </div>
             `;
         }
-        
+
         if (task.result) {
             html += `
                 <div class="detail-section">
                     <h4>Result</h4>
-                    <pre class="detail-result">${escapeHtml(task.result.substring(0, 1000))}</pre>
+                    <pre class="detail-result">${escapeHtml(task.result)}</pre>
                 </div>
             `;
         }
 
-        html += `
-            <div class="detail-actions">
-                <button class="btn btn-primary" onclick="showTaskPayload('${task.id}')">View Payload</button>
-            </div>
-        </div>`;
+        html += `</div>`;
         body.innerHTML = html;
         modal.classList.add('show');
     } catch (error) {
@@ -706,9 +665,6 @@ function switchTab(tabName) {
         updateAgentStats();
     } else if (tabName === 'approvals') {
         updateApprovals();
-    } else if (tabName === 'results') {
-        const selectedAgent = document.getElementById('results-agent-select').value || 'orchestrator';
-        updateResults(selectedAgent);
     } else if (tabName === 'logs') {
         const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
         updateLogs(selectedAgent);

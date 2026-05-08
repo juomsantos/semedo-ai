@@ -19,6 +19,7 @@ class TaskMonitor:
         self.project_root = Path(project_root)
         self.inbox = self.project_root / "inbox"
         self.processing = self.project_root / "processing"
+        self.validation = self.project_root / "validation"
         self.outbox = self.project_root / "outbox"
         self.failed = self.project_root / "failed"
         self.logs_dir = self.project_root / "logs"
@@ -118,7 +119,14 @@ class TaskMonitor:
                 task = self._parse_task_file(task_file, "processing", "processing")
                 if task:
                     tasks.append(task)
-        
+
+        # Validation tasks (awaiting orchestrator review)
+        if self.validation.exists():
+            for task_file in sorted(self.validation.glob("*.task.md"), reverse=True)[:limit]:
+                task = self._parse_task_file(task_file, "validating", "validation")
+                if task:
+                    tasks.append(task)
+
         # Completed tasks
         if self.outbox.exists():
             for task_file in sorted(self.outbox.glob("*.task.md"), reverse=True)[:limit]:
@@ -154,6 +162,7 @@ class TaskMonitor:
         for folder, status_val in [
             (self.inbox, "pending"),
             (self.processing, "processing"),
+            (self.validation, "validating"),
             (self.outbox, "completed"),
             (self.failed, "failed"),
             (self.claude_code_pending, "pending_approval"),
@@ -165,7 +174,7 @@ class TaskMonitor:
                     status = status_val
                     location = folder
                     break
-        
+
         # Also search agent inboxes
         if not task_file and self.agents_dir.exists():
             for agent_dir in self.agents_dir.iterdir():
@@ -176,22 +185,30 @@ class TaskMonitor:
                     status = "pending"
                     location = agent_inbox
                     break
-        
+
         if not task_file:
             return None
-        
+
         task = self._parse_task_file(task_file, status, str(location))
         if not task:
             return None
-        
+
+        # Include full task body for the detail view
+        try:
+            content = task_file.read_text(encoding="utf-8")
+            parts = content.split("---", 2)
+            task["body"] = parts[2].strip() if len(parts) >= 3 else ""
+        except Exception:
+            task["body"] = ""
+
         # Get result file if it exists
         result_file = self.outbox / f"{task_id}_result.md"
         if not result_file.exists():
             result_file = self.failed / f"{task_id}_result.md"
-        
+
         if result_file.exists():
             task["result"] = result_file.read_text(encoding="utf-8")
-        
+
         # Get logs
         task["logs"] = self._get_task_logs(task_id)
 
@@ -203,6 +220,7 @@ class TaskMonitor:
         for folder in [
             self.inbox,
             self.processing,
+            self.validation,
             self.outbox,
             self.failed,
             self.claude_code_pending,
