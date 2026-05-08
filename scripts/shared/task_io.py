@@ -69,8 +69,19 @@ def mark_processing(task_path):
 
 
 def mark_awaiting_validation(task_path):
-    """Move task to validation folder (awaiting orchestrator approval)."""
-    return move_task(task_path, get_folder("validation"))
+    """Move task to validation folder and update status to awaiting_validation."""
+    import re as _re
+    new_path = move_task(task_path, get_folder("validation"))
+    content = new_path.read_text(encoding="utf-8")
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            new_fm = _re.sub(r"^status:.*", "status: awaiting_validation", parts[1], flags=_re.MULTILINE)
+            if "status:" not in new_fm:
+                new_fm = new_fm.rstrip("\n") + "\nstatus: awaiting_validation\n"
+            content = f"---{new_fm}---{parts[2]}"
+            new_path.write_text(content, encoding="utf-8")
+    return new_path
 
 
 def mark_completed(task_path):
