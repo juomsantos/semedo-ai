@@ -1,6 +1,6 @@
 # AI Team — Multi-Agent Architecture
 
-> Last updated: 2026-05-07 (post-bug-fix-batch-3)
+> Last updated: 2026-05-08
 
 ## Overview
 
@@ -292,14 +292,14 @@ REST endpoints:
 |---|---|
 | `GET /api/status` | System metrics (pending/processing/completed/failed/awaiting_approval counts) |
 | `GET /api/tasks` | All tasks; optional `?status=` and `?type=` filters |
-| `GET /api/tasks/<id>` | Full task detail with logs and result preview |
+| `GET /api/tasks/<id>` | Full task detail: metadata, body, logs, result |
+| `GET /api/tasks/<id>/payload` | Raw task file content (frontmatter + body) |
 | `GET /api/agents` | Per-agent stats: completed, errors, prompt_tokens, completion_tokens, llm_calls |
 | `GET /api/agents/<name>/logs` | Last N log lines for an agent |
 | `GET /api/pending-approvals` | Tasks waiting in `agents/claude-code/pending/` |
 | `POST /api/pending-approvals/<id>/approve` | Move task to `agents/claude-code/inbox/` |
 | `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
 | `POST /api/tasks/submit` | Create a task in `inbox/` directly from the dashboard |
-| `GET /api/results/<agent>` | Completed and failed output files for a specific agent (first 2000 chars preview) |
 
 See `DASHBOARD.md` for full API docs, configuration, and troubleshooting.
 
