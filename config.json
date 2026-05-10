@@ -8,7 +8,7 @@
       "model": "qwen3.5:9b"
     },
     "coder": {
-      "model": "qwen2.5-coder:7b"
+      "model": "qwen3.5:9b"
     },
     "research": {
       "model": "qwen3.5:9b"
