@@ -877,4 +877,119 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             result_summary += f"\n## Decision Reasoning\n\n{reasoning}"
 
             output_path = str(outbox_dir / f"{parent_task_id}_result.md")
-            write_result(output_path, result_summary, meta=
+            write_result(output_path, result_summary, meta={"task_id": parent_task_id, "status": "complete"})
+
+            mark_completed(parent_path)
+            log.info(f"Task {parent_task_id} APPROVED and marked complete")
+
+            # Also mark all subtasks as complete and move them to outbox/
+            for subtask in subtasks_for_parent:
+                try:
+                    mark_completed(subtask["path"])
+                    log.info(f"Subtask {Path(subtask['path']).name} marked complete → outbox/")
+                except Exception as e:
+                    log.error(f"Failed to mark subtask complete: {e}")
+
+    elif decision_type in ["refine", "additional_work", "redo"]:
+        # Follow-ups have been created; update parent's iteration counter and keep in processing
+        if parent_path and parent_path.exists():
+            parent_task = read_task(parent_path)
+            current_iter = parent_task["meta"].get("iteration", 1)
+            parent_task["meta"]["iteration"] = current_iter + 1
+            parent_task["meta"]["last_validation"] = decision_type
+            # Update the parent task file with new iteration
+            write_result(str(parent_path), parent_task["body"], meta=parent_task["meta"])
+            log.info(f"Task {parent_task_id} iteration incremented to {current_iter + 1}")
+
+        log.info(f"Task {parent_task_id} needs more work — follow-ups created, awaiting next iteration")
+
+
+def validation_phase(client: OllamaClient, log: AgentLogger):
+    """
+    Validate all completed subtasks waiting in the validation folder.
+    Group by parent task and call orchestrator LLM to decide: complete or create follow-ups.
+    """
+    validation_dir = PROJECT_ROOT / "validation"
+    if not validation_dir.exists():
+        return
+
+    grouped = get_completed_subtasks_by_parent(validation_dir)
+    if not grouped:
+        log.info("No tasks awaiting validation")
+        return
+
+    log.info(f"Found {len(grouped)} parent task(s) with completed subtasks awaiting validation")
+
+    for parent_task_id, completed_subtasks in grouped.items():
+        log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
+
+        # Gate: if any code subtask is still waiting for QA, skip this parent for now.
+        qa_still_running = False
+        for subtask in completed_subtasks:
+            if subtask["meta"].get("chain_to") == "qa" or subtask["meta"].get("type") == "code":
+                qa_status, _ = _find_qa_for_coder_subtask(subtask)
+                if qa_status in ("pending", "not_found"):
+                    log.info(
+                        f"Skipping validation for parent {parent_task_id} — "
+                        f"QA not yet complete for coder subtask {subtask['meta'].get('id')} "
+                        f"(qa_status={qa_status})"
+                    )
+                    qa_still_running = True
+                    break
+        if qa_still_running:
+            continue
+
+        decision = validate_completed_tasks(parent_task_id, completed_subtasks, client, log)
+        if decision:
+            handle_validation_decision(parent_task_id, decision, client, log)
+
+
+def main():
+    log = AgentLogger(AGENT_NAME)
+
+    if not acquire_lock(log):
+        return  # Another instance is running — exit cleanly
+    atexit.register(release_lock)  # Ensure lock is released on any exit
+
+    recover_orphaned_tasks(log)
+    recover_stalled_subtasks(log)
+
+    client = OllamaClient()
+
+    if not client.is_available():
+        log.error(f"Ollama is not reachable at {client.base_url} — aborting")
+        sys.exit(1)
+
+    # Phase 1: Validate completed tasks
+    log.info("=== VALIDATION PHASE ===")
+    validation_phase(client, log)
+
+    # Phase 2: Resolve pending task dependencies
+    agent_inboxes = {
+        "coder": PROJECT_ROOT / "agents" / "coder" / "inbox",
+        "research": PROJECT_ROOT / "agents" / "research" / "inbox",
+        "claude-code": PROJECT_ROOT / "agents" / "claude-code" / "inbox",
+        "qa": PROJECT_ROOT / "agents" / "qa" / "inbox",
+    }
+    log.info("=== DEPENDENCY RESOLUTION PHASE ===")
+    resolve_task_dependencies(agent_inboxes)
+    log.info("Dependency resolution complete")
+
+    # Phase 3: Decompose and dispatch new tasks
+    log.info("=== DISPATCH PHASE ===")
+    tasks = list_pending_tasks(INBOX)
+    if not tasks:
+        log.info("Inbox empty — nothing to do")
+        return
+
+    log.info(f"Found {len(tasks)} pending task(s)")
+    for task_path in tasks:
+        try:
+            task = read_task(task_path)
+            process_task(task, client, log)
+        except Exception as e:
+            log.error(f"Unhandled error processing {task_path.name}: {e}")
+
+
+if __name__ == "__main__":
+    main()

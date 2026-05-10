@@ -160,4 +160,8 @@ The orchestrator picks it up within 1 minute, decomposes it, and routes subtasks
 
 ## Potential Extensions
 
-1. **Parent-child UI** — dashboard currently shows a flat task 
+1. **Parent-child UI** — dashboard currently shows a flat task list; hierarchy view would help track validation iterations
+2. **Worker-initiated research** — allow coder/QA to drop tasks in `research/inbox/` mid-execution and yield until resolved
+3. **Webhooks** — notify when tasks complete
+4. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
+5. **RAG** — embedding + rerank for context-aware routing
