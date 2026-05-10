@@ -1,6 +1,6 @@
 # AI Team — Multi-Agent Architecture
 
-> Last updated: 2026-05-08
+> Last updated: 2026-05-10
 
 ## Overview
 
@@ -131,6 +131,68 @@ iteration: 1                  ← validation loop iteration counter (max 5, on p
 ## Expected Output
 ...
 ```
+
+## Result File Format
+
+Result files are written to `outbox/` by workers and the orchestrator. Each `.task.md` file has a corresponding `*_result.md` file containing the deliverable output.
+
+**Subtask Result** (`outbox/task_..._result.md` — written by worker agent):
+
+```markdown
+---
+task_id: task_YYYYMMDD_HHMMSS_microseconds
+agent: research|coder|qa|claude-code
+model: qwen3.5:9b|qwen2.5-coder:7b|Claude (...)
+---
+
+# Result Title
+
+[Worker-generated output: code, research report, QA verdict, etc.]
+```
+
+**Parent Task Result** (`outbox/task_parent_result.md` — written by orchestrator after validation):
+
+When a parent task completes, the orchestrator aggregates all approved subtask results into a single parent result file. The format includes the orchestrator's validation summary, followed by the actual deliverables:
+
+```markdown
+---
+task_id: task_YYYYMMDD_HHMMSS_microseconds
+status: complete
+---
+
+# Task Completion Summary
+
+Task {parent_task_id} completed after validation.
+
+## Decision Reasoning
+
+{Orchestrator's validation rationale — why this task was approved}
+
+## Subtask Results
+
+### Research Result (Task: task_...)
+
+[Full research output from research subtask]
+
+### Code Result (Task: task_...)
+
+[Full code/implementation from coder subtask]
+
+### Qa Result (Task: task_...)
+
+[Full QA verdict, execution results, and review from QA subtask]
+```
+
+**Result Aggregation Rules:**
+
+- Parent results always include decision reasoning (why it was approved)
+- All approved subtask outputs are aggregated in a single parent result file
+- Subtasks are ordered by type: research → code → qa → other types
+- Each subtask result is included in full (not summarized or truncated)
+- Result files correspond to what was originally requested: if code was requested, the code appears; if research was requested, the research findings appear
+- Missing result files are handled gracefully with a `[Result file not found: ...]` placeholder
+
+This ensures that when reviewing a completed task, all deliverables are available in one place rather than scattered across multiple subtask files.
 
 ## Agent Scripts
 

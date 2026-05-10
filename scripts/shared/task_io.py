@@ -179,6 +179,16 @@ def get_completed_subtasks_by_parent(validation_path=None):
     return grouped
 
 
+def read_subtask_result(output_path: str) -> str:
+    """Read full subtask result file content. Return content or error message if missing."""
+    try:
+        return Path(output_path).read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return f"[Result file not found: {output_path}]"
+    except Exception as e:
+        return f"[Error reading result file {output_path}: {e}]"
+
+
 def resolve_task_dependencies(inboxes_dict: dict) -> None:
     """
     Scan all agent inboxes for tasks with unresolved dependencies.

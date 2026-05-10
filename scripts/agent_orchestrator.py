@@ -45,6 +45,7 @@ from shared.task_io import (
     get_completed_subtasks_by_parent,
     write_result,
     move_task,
+    read_subtask_result,
     PROJECT_ROOT,
 )
 from shared.token_logger import log_tokens
@@ -863,21 +864,53 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             break
 
         if parent_path and parent_path.exists():
-            # Create a result file with summary of accumulated subtask results
+            # Create a result file with summary and aggregated subtask results
             outbox_dir = PROJECT_ROOT / "outbox"
             completed_subtasks = get_completed_subtasks_by_parent(PROJECT_ROOT / "validation")
             subtasks_for_parent = completed_subtasks.get(parent_task_id, [])
 
-            result_summary = f"# Task Completion Summary\n\nTask {parent_task_id} completed after validation.\n\n## Subtask Results\n\n"
-            for subtask in subtasks_for_parent:
-                task_id = subtask["meta"].get("id", "unknown")
-                task_type = subtask["meta"].get("type", "unknown")
-                result_summary += f"- **{task_id}** ({task_type}): Completed\n"
+            result_content = f"# Task Completion Summary\n\nTask {parent_task_id} completed after validation.\n\n## Decision Reasoning\n\n{reasoning}"
 
-            result_summary += f"\n## Decision Reasoning\n\n{reasoning}"
+            # Add aggregated subtask results
+            if subtasks_for_parent:
+                result_content += "\n\n## Subtask Results\n"
+                # Group subtasks by type for better organization
+                subtasks_by_type = {}
+                for subtask in subtasks_for_parent:
+                    task_type = subtask["meta"].get("type", "unknown")
+                    if task_type not in subtasks_by_type:
+                        subtasks_by_type[task_type] = []
+                    subtasks_by_type[task_type].append(subtask)
+
+                # Preferred order: research, code, qa, then others
+                type_order = ["research", "code", "qa"]
+                for task_type in type_order:
+                    if task_type in subtasks_by_type:
+                        for subtask in subtasks_by_type[task_type]:
+                            task_id = subtask["meta"].get("id", "unknown")
+                            output_path = subtask["meta"].get("output_path")
+                            result_content += f"\n### {task_type.capitalize()} Result (Task: {task_id})\n\n"
+                            if output_path:
+                                subtask_content = read_subtask_result(output_path)
+                                result_content += subtask_content
+                            else:
+                                result_content += "[No output path recorded for this subtask]"
+
+                # Include other task types not in the preferred order
+                for task_type, subtasks_list in subtasks_by_type.items():
+                    if task_type not in type_order:
+                        for subtask in subtasks_list:
+                            task_id = subtask["meta"].get("id", "unknown")
+                            output_path = subtask["meta"].get("output_path")
+                            result_content += f"\n### {task_type.capitalize()} Result (Task: {task_id})\n\n"
+                            if output_path:
+                                subtask_content = read_subtask_result(output_path)
+                                result_content += subtask_content
+                            else:
+                                result_content += "[No output path recorded for this subtask]"
 
             output_path = str(outbox_dir / f"{parent_task_id}_result.md")
-            write_result(output_path, result_summary, meta={"task_id": parent_task_id, "status": "complete"})
+            write_result(output_path, result_content, meta={"task_id": parent_task_id, "status": "complete"})
 
             mark_completed(parent_path)
             log.info(f"Task {parent_task_id} APPROVED and marked complete")
