@@ -267,44 +267,87 @@ def _extract_qa_verdict(qa_task: dict) -> str:
     return "UNKNOWN"
 
 
+_RETRY_CODER_FAILED = object()  # sentinel: retry coder task ended up in failed/
+
+
 def _find_retry_coder_output(qa_task: dict):
     """
     When QA fails (retry_count=0) it dispatches a retry coder task.
     Find that retry coder's output_path if it has completed.
-    Returns the output_path string, or None if not ready yet.
+
+    Returns:
+      output_path (str)      — retry coder finished, result file exists
+      None                   — retry coder still in-flight (or not yet dispatched)
+      _RETRY_CODER_FAILED    — retry coder ended in failed/ (chain exhausted)
     """
     qa_task_id = qa_task["meta"].get("id", "")
     if not qa_task_id:
         return None
 
+    # Only match retry coder tasks created *after* this QA task ran.
+    qa_created_at = qa_task["meta"].get("created_at", "")
+
     # The retry coder task was created_by the qa agent shortly after this qa task ran.
-    # It lives in coder/inbox, processing/, validation/, or outbox/.
-    search_dirs = [
+    # It lives in coder/inbox, processing/, validation/, outbox/, or failed/.
+    in_flight_dirs = [
         PROJECT_ROOT / "agents" / "coder" / "inbox",
         PROJECT_ROOT / "processing",
+    ]
+    done_dirs = [
         PROJECT_ROOT / "validation",
         PROJECT_ROOT / "outbox",
     ]
+    failed_dirs = [
+        PROJECT_ROOT / "failed",
+    ]
 
-    for folder in search_dirs:
+    def _matches(task: dict) -> bool:
+        if task["meta"].get("created_by") != "qa":
+            return False
+        if task["meta"].get("type") not in ("code",):
+            return False
+        # Timestamp guard: retry task must have been created at or after the QA task
+        candidate_created = task["meta"].get("created_at", "")
+        if qa_created_at and candidate_created and candidate_created < qa_created_at:
+            return False
+        return True
+
+    # Check in-flight first
+    for folder in in_flight_dirs:
         if not folder.exists():
             continue
         for task_file in folder.glob("*.task.md"):
             try:
                 task = read_task(task_file)
-                if task["meta"].get("created_by") != "qa":
+                if _matches(task):
+                    return None  # Still running — not ready
+            except Exception:
+                continue
+
+    # Check done dirs
+    for folder in done_dirs:
+        if not folder.exists():
+            continue
+        for task_file in folder.glob("*.task.md"):
+            try:
+                task = read_task(task_file)
+                if not _matches(task):
                     continue
-                if task["meta"].get("type") not in ("code",):
-                    continue
-                # Must have been created after the QA task
                 output_path = task["meta"].get("output_path", "")
-                # Coder in outbox/ means it completed; check result file exists
-                if folder in (PROJECT_ROOT / "validation", PROJECT_ROOT / "outbox"):
-                    if output_path and Path(output_path).exists():
-                        return output_path
-                else:
-                    # Still running — not ready
-                    return None
+                if output_path and Path(output_path).exists():
+                    return output_path
+            except Exception:
+                continue
+
+    # Check failed/ — retry coder crashed or timed out; chain is exhausted
+    for folder in failed_dirs:
+        if not folder.exists():
+            continue
+        for task_file in folder.glob("*.task.md"):
+            try:
+                task = read_task(task_file)
+                if _matches(task):
+                    return _RETRY_CODER_FAILED
             except Exception:
                 continue
 
@@ -347,8 +390,12 @@ def _find_qa_for_coder_subtask(coder_subtask: dict):
     # QA dispatched a retry coder task. Follow the chain.
     retry_output = _find_retry_coder_output(qa_task)
     if retry_output is None:
-        # Retry coder is still running (or hasn't started)
+        # Retry coder is still running (or hasn't started yet)
         return "pending", None
+    if retry_output is _RETRY_CODER_FAILED:
+        # Retry coder crashed / timed out — chain is exhausted.
+        # Return QA1 as the terminal result so the orchestrator can act.
+        return "done", qa_task
 
     # Step 2: find QA for the retry coder output
     status2, qa_task2 = _find_qa_for_output(retry_output)
@@ -381,14 +428,13 @@ def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, clie
                 parent_meta = {}
             if parent_meta.get("status") == "complete":
                 # Parent finished (e.g. force-completed before restart) — subtasks are
-                # stale but not failures.  Move them to outbox/ so the dashboard doesn't
-                # show them as failed.
+                # stale but not failures.  Mark them complete and move to outbox/.
                 for subtask in completed_subtasks:
                     try:
-                        move_task(subtask["path"], PROJECT_ROOT / "outbox")
-                        log.info(f"Stale subtask {Path(subtask['path']).name} moved to outbox/ (parent {parent_task_id} already complete)")
+                        mark_completed(subtask["path"])
+                        log.info(f"Stale subtask {Path(subtask['path']).name} marked complete → outbox/ (parent {parent_task_id} already complete)")
                     except Exception as e:
-                        log.error(f"Failed to move stale subtask to outbox/: {e}")
+                        log.error(f"Failed to mark stale subtask complete: {e}")
                 return None
         log.error(f"Cannot find parent task {parent_task_id} — moving orphaned subtasks to failed/")
         for subtask in completed_subtasks:
@@ -831,111 +877,4 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             result_summary += f"\n## Decision Reasoning\n\n{reasoning}"
 
             output_path = str(outbox_dir / f"{parent_task_id}_result.md")
-            write_result(output_path, result_summary, meta={"task_id": parent_task_id, "status": "complete"})
-
-            mark_completed(parent_path)
-            log.info(f"Task {parent_task_id} APPROVED and marked complete")
-
-    elif decision_type in ["refine", "additional_work", "redo"]:
-        # Follow-ups have been created; update parent's iteration counter and keep in processing
-        if parent_path and parent_path.exists():
-            parent_task = read_task(parent_path)
-            current_iter = parent_task["meta"].get("iteration", 1)
-            parent_task["meta"]["iteration"] = current_iter + 1
-            parent_task["meta"]["last_validation"] = decision_type
-            # Update the parent task file with new iteration
-            write_result(str(parent_path), parent_task["body"], meta=parent_task["meta"])
-            log.info(f"Task {parent_task_id} iteration incremented to {current_iter + 1}")
-
-        log.info(f"Task {parent_task_id} needs more work — follow-ups created, awaiting next iteration")
-
-
-def validation_phase(client: OllamaClient, log: AgentLogger):
-    """
-    Validate all completed subtasks waiting in the validation folder.
-    Group by parent task and call orchestrator LLM to decide: complete or create follow-ups.
-    """
-    validation_dir = PROJECT_ROOT / "validation"
-    if not validation_dir.exists():
-        return
-
-    grouped = get_completed_subtasks_by_parent(validation_dir)
-    if not grouped:
-        log.info("No tasks awaiting validation")
-        return
-
-    log.info(f"Found {len(grouped)} parent task(s) with completed subtasks awaiting validation")
-
-    for parent_task_id, completed_subtasks in grouped.items():
-        log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
-
-        # Gate: if any code subtask is still waiting for QA, skip this parent for now.
-        qa_still_running = False
-        for subtask in completed_subtasks:
-            if subtask["meta"].get("chain_to") == "qa" or subtask["meta"].get("type") == "code":
-                qa_status, _ = _find_qa_for_coder_subtask(subtask)
-                if qa_status in ("pending", "not_found"):
-                    log.info(
-                        f"Skipping validation for parent {parent_task_id} — "
-                        f"QA not yet complete for coder subtask {subtask['meta'].get('id')} "
-                        f"(qa_status={qa_status})"
-                    )
-                    qa_still_running = True
-                    break
-        if qa_still_running:
-            continue
-
-        decision = validate_completed_tasks(parent_task_id, completed_subtasks, client, log)
-        if decision:
-            handle_validation_decision(parent_task_id, decision, client, log)
-
-
-def main():
-    log = AgentLogger(AGENT_NAME)
-
-    if not acquire_lock(log):
-        return  # Another instance is running — exit cleanly
-    atexit.register(release_lock)  # Ensure lock is released on any exit
-
-    recover_orphaned_tasks(log)
-    recover_stalled_subtasks(log)
-
-    client = OllamaClient()
-
-    if not client.is_available():
-        log.error(f"Ollama is not reachable at {client.base_url} — aborting")
-        sys.exit(1)
-
-    # Phase 1: Validate completed tasks
-    log.info("=== VALIDATION PHASE ===")
-    validation_phase(client, log)
-
-    # Phase 2: Resolve pending task dependencies
-    agent_inboxes = {
-        "coder": PROJECT_ROOT / "agents" / "coder" / "inbox",
-        "research": PROJECT_ROOT / "agents" / "research" / "inbox",
-        "claude-code": PROJECT_ROOT / "agents" / "claude-code" / "inbox",
-        "qa": PROJECT_ROOT / "agents" / "qa" / "inbox",
-    }
-    log.info("=== DEPENDENCY RESOLUTION PHASE ===")
-    resolve_task_dependencies(agent_inboxes)
-    log.info("Dependency resolution complete")
-
-    # Phase 3: Decompose and dispatch new tasks
-    log.info("=== DISPATCH PHASE ===")
-    tasks = list_pending_tasks(INBOX)
-    if not tasks:
-        log.info("Inbox empty — nothing to do")
-        return
-
-    log.info(f"Found {len(tasks)} pending task(s)")
-    for task_path in tasks:
-        try:
-            task = read_task(task_path)
-            process_task(task, client, log)
-        except Exception as e:
-            log.error(f"Unhandled error processing {task_path.name}: {e}")
-
-
-if __name__ == "__main__":
-    main()
+            write_result(output_path, result_summary, meta=
