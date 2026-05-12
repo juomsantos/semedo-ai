@@ -710,6 +710,64 @@ After {MAX_STALL_RETRIES} retries, the subtasks continue to fail. The parent tas
             log.error(f"Error processing stalled parent {parent_task_id}: {e}")
 
 
+def recover_orphaned_validation_subtasks(log: AgentLogger):
+    """
+    Sweep orphaned subtasks from validation/ to outbox/.
+
+    A subtask stuck in validation/ is orphaned when its parent has already
+    completed and moved to outbox/, but the orchestrator's normal validation
+    phase never cleaned it up.  This happens for two categories:
+
+    1. Subtasks WITH parent_task_id whose parent is complete in outbox/
+       (e.g. coder subtasks whose parent finished via another iteration).
+    2. Subtasks WITHOUT parent_task_id (QA tasks, QA-dispatched retry coders)
+       whose result file already exists in outbox/ — meaning a worker finished
+       the task but the orchestrator never called mark_completed() on the file.
+
+    Note: timed-out tasks with no result and no parent_task_id are not handled
+    here; they remain in validation/ until manual cleanup.
+    """
+    validation_dir = PROJECT_ROOT / "validation"
+    if not validation_dir.exists():
+        return
+
+    for task_file in validation_dir.glob("*.task.md"):
+        try:
+            task = read_task(task_file)
+            meta = task["meta"]
+            orphaned = False
+
+            # Case 1: has parent_task_id and parent is complete in outbox/
+            parent_task_id = meta.get("parent_task_id")
+            if parent_task_id:
+                outbox_parent = PROJECT_ROOT / "outbox" / f"{parent_task_id}.task.md"
+                if outbox_parent.exists():
+                    try:
+                        parent_meta = read_task(outbox_parent)["meta"]
+                        if parent_meta.get("status") == "complete":
+                            orphaned = True
+                    except Exception:
+                        pass
+
+            # Case 2: no parent_task_id but result file already written to outbox/
+            # (covers QA tasks and QA-dispatched retry coders that completed but
+            # were never swept by the normal validation loop)
+            if not orphaned:
+                output_path = meta.get("output_path")
+                if output_path and Path(output_path).exists():
+                    orphaned = True
+
+            if orphaned:
+                mark_completed(str(task_file))
+                log.warning(
+                    f"Swept orphaned validation subtask {task_file.name} → outbox/"
+                )
+        except Exception as e:
+            log.error(
+                f"Error sweeping orphaned validation subtask {task_file.name}: {e}"
+            )
+
+
 def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     """Route or decompose a single task."""
     task_id = task["meta"].get("id", "unknown")
@@ -1118,13 +1176,26 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             mark_completed(parent_path)
             log.info(f"Task {parent_task_id} APPROVED and marked complete")
 
-            # Also mark all subtasks as complete and move them to outbox/
+            # Mark all known subtasks complete (those with parent_task_id set).
             for subtask in subtasks_for_parent:
                 try:
                     mark_completed(subtask["path"])
                     log.info(f"Subtask {Path(subtask['path']).name} marked complete → outbox/")
                 except Exception as e:
                     log.error(f"Failed to mark subtask complete: {e}")
+
+            # Belt-and-suspenders: sweep any remaining tasks in validation/ for this
+            # parent that were missed above (e.g. QA tasks or retry coders created
+            # before parent_task_id stamping was in place).
+            validation_dir = PROJECT_ROOT / "validation"
+            for leftover in validation_dir.glob("*.task.md"):
+                try:
+                    leftover_meta = read_task(leftover)["meta"]
+                    if leftover_meta.get("parent_task_id") == parent_task_id:
+                        mark_completed(str(leftover))
+                        log.info(f"Swept leftover validation subtask {leftover.name} → outbox/")
+                except Exception as e:
+                    log.error(f"Failed to sweep leftover subtask {leftover.name}: {e}")
 
     elif decision_type in ["refine", "additional_work", "redo"]:
         # Follow-ups have been created; update parent's iteration counter and keep in processing
@@ -1203,6 +1274,7 @@ def main():
 
     recover_orphaned_tasks(log)
     recover_stalled_subtasks(log)
+    recover_orphaned_validation_subtasks(log)
 
     client = OllamaClient()
 

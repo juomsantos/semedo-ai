@@ -101,6 +101,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
             original_description=task["meta"].get("original_description") or task["body"],
             context_files=[output_path],
             validation_context=qa_validation_context,
+            parent_task_id=task["meta"].get("parent_task_id"),
         )
         log.info("Chained to QA agent")
 

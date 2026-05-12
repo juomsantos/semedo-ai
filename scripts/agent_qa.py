@@ -374,6 +374,7 @@ Please fix these issues and try again."""
             chain_to="qa",
             retry_count=1,
             original_description=original_description,
+            parent_task_id=task["meta"].get("parent_task_id"),
         )
         log.info(f"Created retry task {new_task_path.name}")
 

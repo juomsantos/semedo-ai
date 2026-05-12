@@ -123,6 +123,13 @@ chain_to: qa                  ← optional: agent to hand off to after completio
 retry_count: 0                ← QA retry counter (max 1 before escalating to failed/)
 original_description: ...     ← preserved across retries for QA context
 iteration: 1                  ← validation loop iteration counter (max 5, on parent tasks)
+validation_context:           ← optional dict: orchestrator reasoning + QA feedback from prior iteration,
+                                 injected into redo/refine/additional_work follow-up subtask bodies as
+                                 a "## Validation Context" section so workers know what previously failed
+redecompose_after_research: true  ← optional flag on parent tasks: orchestrator dispatches only research
+                                     first, then re-calls decomposition LLM with research context to produce
+                                     implementation subtasks; flag is cleared after first re-decomposition
+                                     to prevent infinite loops
 ---
 
 ## Task Description
@@ -227,6 +234,8 @@ If a subtask in `validation/` references a parent task that no longer exists in 
 
 **Phase 3 — Dispatch.** Reads new parent tasks from `inbox/`, calls the decomposition LLM (`system_prompt.md`), creates subtasks in worker inboxes, and moves the parent to `processing/` with `status: dispatched`. The `dispatched` status prevents orphan recovery from re-queueing the parent on subsequent cycles. When research and coder subtasks are created together, the coder task is automatically given `depends_on: [research_task_id]` so it waits for the research output before running. Ollama timeout is set to 240s (`config.json`) to accommodate complex decomposition calls.
 
+If the decomposition LLM determines that research must complete before a good implementation plan can be written, it can set `redecompose_after_research: true` on the parent and dispatch only the research subtask(s). When the research result reaches Phase 1 validation and is approved, `redecompose_with_research()` re-calls the decomposition LLM with the research output injected as context, then dispatches the implementation subtasks. The `redecompose_after_research` flag is cleared immediately after the first re-decomposition to prevent the cycle from triggering again.
+
 ## Task Flow
 
 ```
@@ -252,11 +261,11 @@ Once in `agents/claude-code/inbox/`, the agent picks it up on its next 3-minute 
 All code tasks automatically chain through QA:
 
 1. Orchestrator sets `chain_to: qa` on every code subtask.
-2. Coder completes → creates QA task in `agents/qa/inbox/` with the result file in `context_files`.
+2. Coder completes → creates QA task in `agents/qa/inbox/` with the result file in `context_files`. The QA task inherits `parent_task_id` from the coder task so it is linked to the original parent.
 3. QA: extracts code → executes via subprocess (30s timeout) → reviews with qwen3.5:9b.  
    May perform up to 3 DuckDuckGo searches to look up errors or verify library usage.
 4. **PASS** → writes approval to `outbox/`, moves task to `validation/`.
-5. **FAIL, retry_count=0** → creates new coder task with QA feedback, `retry_count=1`.
+5. **FAIL, retry_count=0** → creates new coder task with QA feedback, `retry_count=1`. The retry coder task also inherits `parent_task_id` so it remains linked to the original parent.
 6. **FAIL, retry_count=1** → writes failure report to `failed/`, moves task to `validation/`.
 
 ## Token Logging
@@ -301,9 +310,13 @@ The preamble instructs the agent to write its complete response as plain text in
 
 The orchestrator uses a lockfile (`processing/orchestrator.lock`) to prevent concurrent instances. Stale locks (dead PID) are cleaned up automatically on the next run.
 
-**Orphan recovery.** At startup (before Phase 1), the orchestrator scans `processing/` for any `.task.md` file with `status: pending`. These are tasks that were moved to `processing/` by `mark_processing()` but whose decomposition never completed — typically because the process was killed mid-LLM-call. They are moved back to `inbox/` and logged as warnings so they re-enter the pipeline on the next cycle. Tasks with `status: processing` (intentionally placed there by the validation loop) are not touched.
+**Orphan recovery.** Three recovery functions run at startup before Phase 1:
 
-When the validation phase encounters a subtask whose parent is no longer in `processing/`, it checks `outbox/` before marking the subtask as failed. If the parent is in `outbox/` with `status: complete` — as happens when a parent was force-completed just before a scheduler restart — the subtask is moved to `outbox/` instead. This prevents legitimate completed work from appearing as failures in the dashboard.
+1. `recover_orphaned_tasks()` — scans `processing/` for `.task.md` files with `status: pending`. These are parent tasks whose LLM decomposition call never finished (e.g. killed mid-call). They are moved back to `inbox/` so they re-enter the pipeline. Tasks with `status: dispatched` or `status: processing` are not touched.
+
+2. `recover_stalled_subtasks()` — scans worker inboxes and `processing/` for subtasks whose parent is no longer active. If the parent is in `outbox/` with `status: complete`, the subtask is moved to `outbox/`; if the parent is missing from both `processing/` and `outbox/`, the subtask is moved to `failed/`. This prevents a scheduler restart from converting legitimate completed work into failures.
+
+3. `recover_orphaned_validation_subtasks()` — sweeps `validation/` for subtasks that were stranded because the in-cycle belt-and-suspenders pass didn't reach them (most commonly QA tasks and retry coders that lacked `parent_task_id` before that propagation was added). Two detection cases: (a) subtask has `parent_task_id` and that parent is in `outbox/` with `status: complete`; (b) subtask has no `parent_task_id` but its `output_path` result file already exists in `outbox/`. Both cases move the subtask to `outbox/` via `mark_completed()`.
 
 **SIGINT isolation.** Each agent subprocess is spawned with `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP` on Windows or `start_new_session=True` on Unix. This isolates agent processes from the scheduler's console signal group, so pressing Ctrl+C in the scheduler terminal stops the scheduler gracefully without propagating the signal to any in-flight agent LLM call.
 

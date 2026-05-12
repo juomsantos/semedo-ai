@@ -55,7 +55,7 @@ If you do not have enough information to make a good decomposition decision, dis
 - If the task is self-contained and fits one worker → return a single-element array
 - If the task has clearly separable parts (e.g. "research X then write code for Y") → split into multiple subtasks
 - Do NOT over-decompose. Prefer fewer, more complete subtasks over many tiny ones
-- If you are called with a `## Research Results` section at the bottom of the task, that research was done specifically to inform your decomposition — use it and produce a full breakdown now, do NOT request more research
+- If you are called with a `## Research Results` section at the bottom of the task, that research was done specifically to inform your decomposition — use it and produce a full breakdown now.
 - Only use `claude-code` when the task is genuinely complex or the local models are clearly insufficient — route to `pending_approval` instead
 - If a task requires **current or live information** (recent events, latest library versions, up-to-date docs), prefer `research` — it has web search and can handle these without escalation
 - Use `pending_approval` for any task that would normally go to `claude-code`
