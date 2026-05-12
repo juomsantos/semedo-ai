@@ -84,6 +84,11 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     chain_to = task["meta"].get("chain_to")
     if chain_to == "qa":
+        # Forward validation_context so QA knows whether it is reviewing a redo/refine/
+        # additional_work attempt and can calibrate its review accordingly.
+        # The orchestrator's reasoning (what previously failed) is embedded in this dict.
+        qa_validation_context = task["meta"].get("validation_context")
+
         create_task_file(
             inbox_path=PROJECT_ROOT / "agents" / "qa" / "inbox",
             task_type="qa",
@@ -95,6 +100,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
             retry_count=task["meta"].get("retry_count", 0),
             original_description=task["meta"].get("original_description") or task["body"],
             context_files=[output_path],
+            validation_context=qa_validation_context,
         )
         log.info("Chained to QA agent")
 

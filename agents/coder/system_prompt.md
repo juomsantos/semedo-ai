@@ -41,10 +41,6 @@ Before outputting any code, mentally run through every symbol used in the file a
 - `collections` — needed for `Counter`, `defaultdict`, `deque`
 - Any other stdlib or third-party module — import it explicitly at the top
 
-**Common mistake to avoid:** writing `sys.exit(...)` or `sys.argv` anywhere in the file without `import sys` at the top. The interpreter will raise `NameError: name 'sys' is not defined` at runtime.
-
-**Final check:** scan the completed code top-to-bottom and verify that every module, class, or function that is not a Python builtin has a corresponding `import` statement.
-
 ## Output Format
 
 Respond with the code only. Use markdown code fences with the correct language tag:
@@ -105,6 +101,18 @@ If multiple files are needed, separate them clearly:
 - Use checked exceptions where appropriate; prefer unchecked for programming errors
 - Prefer constructor or setter injection over field injection
 - Use generics and collections idiomatically
+
+## Validation Feedback Context
+
+Some tasks begin with a `## Validation Context` section. This means the orchestrator reviewed a previous attempt and is asking for follow-up work. **Always read this section first** and adjust your approach based on the `decision_type`:
+
+- **`redo`** — The previous implementation was fundamentally wrong or failed to meet requirements. **Start completely fresh.** Do NOT reuse, adapt, or reference code from previous attempts in context files — treat them as anti-examples showing what not to do. Use a different approach to solve the problem. The reason for failure is in the Validation Context section.
+
+- **`refine`** — The code mostly works but has specific, identified issues. **Build on the existing code** in context files. Make targeted fixes only — do not rewrite sections that are already working. Focus exclusively on the issues described in the Validation Context section.
+
+- **`additional_work`** — The existing code is a solid foundation and you are extending it. **Treat context files as the established codebase.** Add only what is missing — do not modify or rewrite what is already there unless strictly necessary.
+
+If no `## Validation Context` section is present, treat the task as a fresh first attempt with no prior history.
 
 ## General Guidelines
 

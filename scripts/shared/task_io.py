@@ -114,7 +114,15 @@ def create_task_file(
     original_description=None,
     parent_task_id=None,
     depends_on=None,
+    validation_context=None,
 ):
+    """
+    validation_context: optional dict with keys:
+      - decision_type: "redo" | "refine" | "additional_work"
+      - reasoning: the orchestrator's explanation for why this follow-up was created
+    When provided, the decision type is written to frontmatter AND injected as a
+    ## Validation Context section at the top of the task body so workers see it clearly.
+    """
     task_id = generate_task_id()
     output_path = str(get_folder("outbox") / f"{task_id}_result.md")
 
@@ -140,8 +148,27 @@ def create_task_file(
         meta["parent_task_id"] = parent_task_id
     if depends_on is not None:
         meta["depends_on"] = depends_on
+    if validation_context is not None:
+        # Store the full dict so downstream agents (e.g. coder → QA) can forward it
+        meta["validation_context"] = validation_context
 
-    body = f"## Task Description\n\n{description}\n\n## Expected Output\n\n{expected_output}"
+    # Prepend a Validation Context section so workers see it prominently in the body.
+    # This is the primary signal workers should act on — it appears before the task
+    # description so it cannot be missed even if the LLM skims the frontmatter.
+    if validation_context:
+        decision_type = validation_context.get("decision_type", "")
+        reasoning = validation_context.get("reasoning", "")
+        context_block = (
+            f"## Validation Context\n\n"
+            f"**This is a follow-up task. The orchestrator reviewed the previous attempt and decided: `{decision_type}`**\n\n"
+            f"**Reason:** {reasoning}\n\n"
+            f"Read the Validation Feedback Context section in your system prompt to understand "
+            f"how to adjust your approach for a `{decision_type}` request.\n\n"
+            f"---\n\n"
+        )
+        body = context_block + f"## Task Description\n\n{description}\n\n## Expected Output\n\n{expected_output}"
+    else:
+        body = f"## Task Description\n\n{description}\n\n## Expected Output\n\n{expected_output}"
     post = frontmatter.Post(body, **meta)
 
     inbox = Path(inbox_path)

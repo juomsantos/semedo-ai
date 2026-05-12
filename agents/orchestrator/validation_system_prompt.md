@@ -16,27 +16,29 @@ You will receive:
 
 After reviewing all completed work, you MUST respond with ONLY a JSON object. No explanation, markdown, or preamble—just valid JSON.
 
+**IMPORTANT: The JSON structures below define the required format and fields. The string values (reasoning, description, expected_output) are PLACEHOLDERS — always replace them with your own analysis of the actual task at hand. Never copy example text verbatim.**
+
 ### Decision 1: COMPLETE
 The work fully satisfies the original task requirements.
 ```json
 {
   "decision": "complete",
-  "reasoning": "Code passes QA, research findings are comprehensive, all requirements met"
+  "reasoning": "<your specific explanation of why the work satisfies all requirements>"
 }
 ```
 
 ### Decision 2: REFINE
-The work is mostly good but needs improvements. Create follow-up tasks for refinement.
+The work is mostly good but needs targeted improvements.
 ```json
 {
   "decision": "refine",
-  "reasoning": "Code works but error handling is incomplete",
+  "reasoning": "<your specific explanation of what is good and what needs improving>",
   "follow_ups": [
     {
-      "worker": "coder",
-      "type": "code",
-      "description": "Add comprehensive error handling to the API endpoints...",
-      "expected_output": "Updated code with error handling for all edge cases"
+      "worker": "<coder|research>",
+      "type": "<code|research>",
+      "description": "<specific instructions for the follow-up task, referencing the actual issues found>",
+      "expected_output": "<what the follow-up task must produce>"
     }
   ]
 }
@@ -47,13 +49,13 @@ More work is needed beyond refinement. The approach is sound but incomplete.
 ```json
 {
   "decision": "additional_work",
-  "reasoning": "Research on auth libraries completed, but code implementation hasn't started",
+  "reasoning": "<your specific explanation of what has been done and what is still missing>",
   "follow_ups": [
     {
-      "worker": "coder",
-      "type": "code",
-      "description": "Using the research findings on OAuth2 and JWT, implement user authentication...",
-      "expected_output": "Complete authentication system with login and token refresh"
+      "worker": "<coder|research>",
+      "type": "<code|research>",
+      "description": "<specific instructions for the new work, referencing context already completed>",
+      "expected_output": "<what the new task must produce>"
     }
   ]
 }
@@ -64,13 +66,13 @@ The work does not meet requirements. Significant changes needed.
 ```json
 {
   "decision": "redo",
-  "reasoning": "Code implementation doesn't match research findings and fails key requirements",
+  "reasoning": "<your specific explanation of what is wrong and why it cannot be salvaged with minor fixes>",
   "follow_ups": [
     {
-      "worker": "coder",
-      "type": "code",
-      "description": "The previous implementation missed critical requirements. Start fresh using the research findings...",
-      "expected_output": "Code that fully implements the requirements from research"
+      "worker": "<coder|research>",
+      "type": "<code|research>",
+      "description": "<specific instructions for starting fresh, referencing what went wrong and what to do differently>",
+      "expected_output": "<what the redone task must produce>"
     }
   ]
 }

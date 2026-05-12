@@ -120,20 +120,29 @@ def load_validation_prompt() -> str:
     return VALIDATION_PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def parse_routing_decision(response: str) -> list[dict]:
+def parse_routing_decision(response: str) -> tuple[list[dict], bool]:
     """
     Parse the LLM's routing decision from its response.
-    Expected format is a JSON array of subtask objects:
+
+    Accepts two formats:
+
+    Plain array (standard decomposition):
     [
-      {
-        "worker": "coder"|"research"|"claude-code",
-        "type": "code"|"research"|"summarize"|...,
-        "description": "...",
-        "expected_output": "..."
-      },
+      {"worker": "coder", "type": "code", "description": "...", "expected_output": "..."},
       ...
     ]
-    TODO: Implement robust parsing with fallback to single-task routing.
+
+    Wrapper object (research-first, re-decompose after results):
+    {
+      "redecompose_after_research": true,
+      "subtasks": [
+        {"worker": "research", "type": "research", "description": "...", "expected_output": "..."}
+      ]
+    }
+
+    Returns (subtasks, redecompose_after_research).
+    When redecompose_after_research is True all subtasks must target the research worker;
+    if non-research subtasks are found the flag is cleared and a warning is logged.
     """
     import re
 
@@ -146,7 +155,12 @@ def parse_routing_decision(response: str) -> list[dict]:
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse JSON from response: {e}")
 
-    # Ensure it's a list
+    # Handle wrapper object format
+    redecompose_flag = False
+    if isinstance(data, dict):
+        redecompose_flag = bool(data.get("redecompose_after_research", False))
+        data = data.get("subtasks", [])
+
     if not isinstance(data, list):
         raise ValueError(f"Expected JSON array, got {type(data).__name__}")
 
@@ -167,7 +181,15 @@ def parse_routing_decision(response: str) -> list[dict]:
         if subtask["worker"] not in valid_workers:
             raise ValueError(f"Subtask {i} has invalid worker '{subtask['worker']}' (valid: {valid_workers})")
 
-    return data
+    # redecompose_after_research is only valid when ALL subtasks target research.
+    # If non-research subtasks slipped in, the LLM misused the format — ignore the flag
+    # and dispatch normally rather than blocking on a re-decompose that will never resolve.
+    if redecompose_flag:
+        non_research = [s for s in data if s.get("worker") != "research"]
+        if non_research:
+            redecompose_flag = False
+
+    return data, redecompose_flag
 
 
 def parse_validation_decision(response: str) -> dict:
@@ -712,7 +734,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         return
 
     try:
-        subtasks = parse_routing_decision(response)
+        subtasks, redecompose_after_research = parse_routing_decision(response)
     except Exception as e:
         log.error(f"Failed to parse routing decision for {task_id}: {e}")
         log.error(f"Raw response: {response[:500]}")
@@ -782,16 +804,160 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         log.info(f"Wired dependency: coder {coder_path.name} depends on research {research_path.name}")
 
     # Update parent task status to "dispatched" so orphan recovery does not
-    # re-dispatch it on the next cycle (recover_orphaned_tasks checks status=="pending")
+    # re-dispatch it on the next cycle (recover_orphaned_tasks checks status=="pending").
+    # Also persist the redecompose_after_research flag when set so validation_phase
+    # can detect it and re-run decomposition once research results arrive.
     try:
         parent_task = read_task(task_path)
         parent_task["meta"]["status"] = "dispatched"
+        if redecompose_after_research:
+            parent_task["meta"]["redecompose_after_research"] = True
+            log.info(f"Task {task_id} flagged for re-decomposition after research completes")
         write_result(str(task_path), parent_task["body"], meta=parent_task["meta"])
         log.info(f"Parent task {task_id} status updated to 'dispatched'")
     except Exception as e:
         log.error(f"Failed to update parent task status for {task_id}: {e}")
 
     log.info(f"Task {task_id} dispatched — awaiting subtask completion in validation loop")
+
+
+def redecompose_with_research(parent_task_id: str, completed_subtasks: list, client: OllamaClient, log: AgentLogger):
+    """
+    Re-run the decomposition prompt for a parent task that was flagged with
+    redecompose_after_research=True, now that its research subtasks have completed.
+
+    Steps:
+      1. Collect all research outputs from completed_subtasks
+      2. Call the decomposition LLM with the original task + research results as context
+      3. Dispatch the resulting subtasks (wire dependencies as normal)
+      4. Mark the completed research subtasks as done → outbox/
+      5. Remove the flag from the parent, increment iteration, keep status=dispatched
+    """
+    processing_dir = PROJECT_ROOT / "processing"
+    parent_path = processing_dir / f"{parent_task_id}.task.md"
+
+    if not parent_path.exists():
+        log.error(f"redecompose_with_research: parent {parent_task_id} not found in processing/")
+        return
+
+    parent_task = read_task(parent_path)
+
+    # Collect research outputs
+    research_sections = []
+    for subtask in completed_subtasks:
+        if subtask["meta"].get("type") == "research":
+            output_path = subtask["meta"].get("output_path", "")
+            if output_path and Path(output_path).exists():
+                content = Path(output_path).read_text(encoding="utf-8")
+                research_sections.append(
+                    f"### Research Result ({Path(output_path).stem})\n\n{content}"
+                )
+
+    if not research_sections:
+        log.warning(f"redecompose_with_research: no research outputs found for {parent_task_id} — falling back to normal validation")
+        return
+
+    # Build the decomposition prompt user message: original task + research context
+    system_prompt = load_system_prompt()
+    meta_for_json = {k: v.isoformat() if hasattr(v, 'isoformat') else v for k, v in parent_task["meta"].items()}
+    research_block = "\n\n---\n\n".join(research_sections)
+    user_message = (
+        f"---\n{json.dumps(meta_for_json, indent=2)}\n---\n\n"
+        f"{parent_task['body']}\n\n"
+        f"## Research Results\n\n"
+        f"The following research was completed to inform your decomposition decision. "
+        f"Use it to produce a fully-informed subtask breakdown.\n\n"
+        f"{research_block}"
+    )
+
+    try:
+        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
+        log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+        log.info(f"Re-decomposition response received ({len(response)} chars)")
+    except OllamaError as e:
+        log.error(f"Ollama error during re-decomposition of {parent_task_id}: {e}")
+        return
+
+    try:
+        subtasks, redecompose_again = parse_routing_decision(response)
+        if redecompose_again:
+            # Guard against infinite loop: the LLM returned the flag again on a re-decompose
+            # call. Ignore the flag and dispatch whatever subtasks it produced.
+            log.warning(
+                f"redecompose_with_research: {parent_task_id} returned redecompose_after_research "
+                f"again — ignoring flag to prevent infinite loop, dispatching subtasks as-is"
+            )
+    except Exception as e:
+        log.error(f"Failed to parse re-decomposition decision for {parent_task_id}: {e}")
+        log.error(f"Raw response: {response[:500]}")
+        return
+
+    # Dispatch new subtasks (mirrors process_task dispatch logic)
+    created_subtasks = {}
+    for subtask in subtasks:
+        worker = subtask["worker"]
+
+        if worker == "pending_approval":
+            pending_inbox = PROJECT_ROOT / "agents" / "claude-code" / "pending"
+            pending_inbox.mkdir(parents=True, exist_ok=True)
+            new_task_path = create_task_file(
+                inbox_path=pending_inbox,
+                task_type=subtask["type"],
+                description=subtask["description"],
+                expected_output=subtask["expected_output"],
+                assigned_to="pending_approval",
+                created_by=AGENT_NAME,
+                parent_task_id=parent_task_id,
+            )
+            log.info(f"Re-decompose: created pending task {new_task_path.name} → pending_approval")
+            continue
+
+        inbox = WORKER_INBOXES.get(worker)
+        if not inbox:
+            log.error(f"Re-decompose: unknown worker '{worker}' — skipping subtask")
+            continue
+
+        chain_to = "qa" if subtask["type"] == "code" else None
+        original_description = subtask["description"] if subtask["type"] == "code" else None
+        new_task_path = create_task_file(
+            inbox_path=inbox,
+            task_type=subtask["type"],
+            description=subtask["description"],
+            expected_output=subtask["expected_output"],
+            assigned_to=worker,
+            created_by=AGENT_NAME,
+            chain_to=chain_to,
+            original_description=original_description,
+            parent_task_id=parent_task_id,
+        )
+        created_subtasks[worker] = new_task_path
+        log.info(f"Re-decompose: created subtask {new_task_path.name} → {worker}")
+
+    # Wire research→coder dependency if both present
+    if "research" in created_subtasks and "coder" in created_subtasks:
+        research_path = created_subtasks["research"]
+        coder_path = created_subtasks["coder"]
+        research_task_data = read_task(research_path)
+        coder_task_data = read_task(coder_path)
+        coder_task_data["meta"]["depends_on"] = [research_task_data["meta"]["id"]]
+        write_result(str(coder_path), coder_task_data["body"], meta=coder_task_data["meta"])
+        log.info(f"Re-decompose: wired coder dependency on research")
+
+    # Mark the completed research subtasks as done so they move to outbox/
+    for subtask in completed_subtasks:
+        try:
+            mark_completed(subtask["path"])
+            log.info(f"Re-decompose: marked research subtask {Path(subtask['path']).name} complete → outbox/")
+        except Exception as e:
+            log.error(f"Re-decompose: failed to mark research subtask complete: {e}")
+
+    # Update parent: remove flag, increment iteration, keep dispatched
+    current_iter = parent_task["meta"].get("iteration", 1)
+    parent_task["meta"].pop("redecompose_after_research", None)
+    parent_task["meta"]["iteration"] = current_iter + 1
+    parent_task["meta"]["status"] = "dispatched"
+    write_result(str(parent_path), parent_task["body"], meta=parent_task["meta"])
+    log.info(f"Task {parent_task_id} re-decomposed — iteration → {current_iter + 1}, awaiting new subtasks")
 
 
 def handle_validation_decision(parent_task_id: str, decision: dict, client: OllamaClient, log: AgentLogger):
@@ -824,6 +990,28 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
     if follow_ups:
         log.info(f"Creating {len(follow_ups)} follow-up task(s) for iteration {current_iteration + 1}")
         created_follow_ups = {}  # track by worker for dependency wiring
+
+        # Build the validation context payload once — all follow-ups share the same decision
+        val_context = {
+            "decision_type": decision_type,
+            "reasoning": reasoning,
+        }
+
+        # For refine/additional_work, collect previous research outputs so they can be
+        # wired into context_files for the research follow-up. This lets the research agent
+        # actually read what was already produced rather than guessing at it from the description.
+        # For redo we intentionally omit them — the agent should start completely fresh.
+        prev_research_outputs = []
+        if decision_type in ("refine", "additional_work"):
+            completed = get_completed_subtasks_by_parent(PROJECT_ROOT / "validation")
+            for subtask in completed.get(parent_task_id, []):
+                if subtask["meta"].get("type") == "research":
+                    output_path = subtask["meta"].get("output_path", "")
+                    if output_path and Path(output_path).exists():
+                        prev_research_outputs.append(output_path)
+            if prev_research_outputs:
+                log.info(f"Wiring {len(prev_research_outputs)} previous research output(s) into research follow-up context")
+
         for idx, followup in enumerate(follow_ups):
             worker = followup.get("worker")
             inbox = WORKER_INBOXES.get(worker)
@@ -832,6 +1020,18 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
                 continue
 
             chain_to = "qa" if followup.get("type") == "code" else None
+            # For code follow-ups, set original_description to the clean task description.
+            # Without this, agent_coder falls back to task["body"] when creating the QA task,
+            # which already contains the ## Validation Context block — causing it to be
+            # duplicated and nested inside ## Task Description in the QA task body.
+            original_description = followup.get("description") if followup.get("type") == "code" else None
+            # Research refine/additional_work follow-ups get the previous research outputs
+            # as context files so the agent can build on them rather than starting blind.
+            followup_context_files = (
+                prev_research_outputs
+                if worker == "research" and prev_research_outputs
+                else None
+            )
             new_task_path = create_task_file(
                 inbox_path=inbox,
                 task_type=followup.get("type"),
@@ -841,6 +1041,9 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
                 created_by=AGENT_NAME,
                 parent_task_id=parent_task_id,
                 chain_to=chain_to,
+                original_description=original_description,
+                context_files=followup_context_files,
+                validation_context=val_context,
             )
             created_follow_ups[worker] = new_task_path
             log.info(f"Created follow-up task {new_task_path.name} → {worker}")
@@ -955,6 +1158,20 @@ def validation_phase(client: OllamaClient, log: AgentLogger):
 
     for parent_task_id, completed_subtasks in grouped.items():
         log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
+
+        # Check for research-first re-decomposition before anything else.
+        # If the parent was flagged with redecompose_after_research, skip normal validation
+        # and re-run the decomposition prompt with the research outputs in context.
+        parent_path = PROJECT_ROOT / "processing" / f"{parent_task_id}.task.md"
+        if parent_path.exists():
+            try:
+                parent_meta = read_task(parent_path)["meta"]
+                if parent_meta.get("redecompose_after_research"):
+                    log.info(f"Parent {parent_task_id} has redecompose_after_research flag — re-decomposing")
+                    redecompose_with_research(parent_task_id, completed_subtasks, client, log)
+                    continue
+            except Exception as e:
+                log.error(f"Failed to read parent task {parent_task_id} for redecompose check: {e}")
 
         # Gate: if any code subtask is still waiting for QA, skip this parent for now.
         qa_still_running = False
