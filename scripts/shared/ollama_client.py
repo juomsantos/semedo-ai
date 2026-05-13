@@ -26,20 +26,28 @@ Ollama configuration (base_url, timeout) is loaded from config.json.
 """
 
 import json
+import os
 from typing import Optional, Callable, Union
 from pathlib import Path
 
-import ollama as _ollama
-
-# Try to load from config, fall back to defaults
+# ── IMPORTANT: set OLLAMA_API_KEY *before* importing the ollama library. ──
+# The library reads it during module initialisation (_client.py __init__),
+# so any value set after the import is silently ignored.
+# ollama_client.py is always the first shared import in every agent script,
+# making this the right place to guarantee the key is set in time.
 try:
     from shared.config import load_config
     _config = load_config()
+    _api_key = _config.web_search_api_key()
+    if _api_key:
+        os.environ["OLLAMA_API_KEY"] = _api_key
     OLLAMA_BASE_URL = _config.ollama_base_url()
     DEFAULT_TIMEOUT = _config.ollama_timeout()
 except Exception:
     OLLAMA_BASE_URL = "http://192.168.1.13:11434"
     DEFAULT_TIMEOUT = 300
+
+import ollama as _ollama
 
 
 class OllamaError(Exception):

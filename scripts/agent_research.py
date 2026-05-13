@@ -42,8 +42,11 @@ MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "research" / "inbox"
 SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "research" / "system_prompt.md"
 
-# Safety cap: maximum tool calls per task to prevent runaway loops
-MAX_TOOL_TURNS = 5
+# Per-tool call limits for the research agent
+MAX_SEARCH_TURNS = 5   # max web_search calls per task
+MAX_FETCH_TURNS  = 10  # max web_fetch calls per task
+# Overall ceiling: prevents infinite loops if the model keeps calling tools
+MAX_TOOL_TURNS = MAX_SEARCH_TURNS + MAX_FETCH_TURNS
 
 # Native tools — the ollama library introspects these functions' type
 # annotations and docstrings to auto-generate the JSON schemas.
@@ -75,16 +78,20 @@ def run_agentic_loop(
     Returns the final text response string.
     Raises OllamaError on unrecoverable API failures.
     """
+    search_turns = 0  # web_search calls used
+    fetch_turns  = 0  # web_fetch calls used
+    active_tools = list(TOOLS)  # shrinks as per-tool limits are hit
+
     for turn in range(MAX_TOOL_TURNS):
         result = client.chat_with_tools(
             model=MODEL,
             messages=messages,
-            tools=TOOLS,
+            tools=active_tools,
         )
 
         if result["type"] == "text":
             log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
-            log.info(f"[{task_id}] Final answer received after {turn} tool turn(s)")
+            log.info(f"[{task_id}] Final answer received (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS})")
             return result["content"]
 
         if result["type"] == "tool_call":
@@ -92,32 +99,44 @@ def run_agentic_loop(
             arguments = result["arguments"]
 
             if tool_name == "web_search":
+                search_turns += 1
                 query = arguments.get("query", "").strip()
                 if not query:
                     log.warning(f"[{task_id}] web_search called with empty query — skipping")
                     tool_result = "ERROR: 'query' parameter was empty. Please provide a search query."
                 else:
-                    log.info(f"[{task_id}] web_search({turn + 1}/{MAX_TOOL_TURNS}): {query!r}")
+                    log.info(f"[{task_id}] web_search({search_turns}/{MAX_SEARCH_TURNS}): {query!r}")
                     tool_result = web_search(query)
                     log.info(f"[{task_id}] web_search returned {len(tool_result)} chars")
+                # Remove web_search from active tools once the limit is reached
+                if search_turns >= MAX_SEARCH_TURNS:
+                    active_tools = [t for t in active_tools if t is not web_search]
+                    log.info(f"[{task_id}] web_search limit reached ({MAX_SEARCH_TURNS}) — removed from active tools")
 
             elif tool_name == "web_fetch":
+                fetch_turns += 1
                 url = arguments.get("url", "").strip()
                 if not url:
                     log.warning(f"[{task_id}] web_fetch called with empty url — skipping")
                     tool_result = "ERROR: 'url' parameter was empty. Please provide a URL."
                 else:
-                    log.info(f"[{task_id}] web_fetch({turn + 1}/{MAX_TOOL_TURNS}): {url!r}")
+                    log.info(f"[{task_id}] web_fetch({fetch_turns}/{MAX_FETCH_TURNS}): {url!r}")
                     tool_result = web_fetch(url)
                     log.info(f"[{task_id}] web_fetch returned {len(tool_result)} chars")
+                # Remove web_fetch from active tools once the limit is reached
+                if fetch_turns >= MAX_FETCH_TURNS:
+                    active_tools = [t for t in active_tools if t is not web_fetch]
+                    log.info(f"[{task_id}] web_fetch limit reached ({MAX_FETCH_TURNS}) — removed from active tools")
 
             else:
                 log.warning(f"[{task_id}] Model called unknown tool '{tool_name}' — skipping")
                 tool_result = f"ERROR: Tool '{tool_name}' is not available."
 
             if tool_result.startswith("ERROR:") and tool_name in ("web_search", "web_fetch"):
-                log.error(f"[{task_id}] Tool error — aborting loop: {tool_result}")
-                raise OllamaError(f"Web tool unavailable: {tool_result}")
+                # Log the failure but pass the error back to the LLM so it can
+                # decide how to proceed (retry with a different query, skip the
+                # fetch, answer from existing knowledge, etc.).
+                log.warning(f"[{task_id}] {tool_name} error (passing to LLM): {tool_result}")
 
             # Append the assistant's tool call and the tool result to history.
             # Use raw_message if available (preserves the library's native format).
@@ -137,7 +156,7 @@ def run_agentic_loop(
             })
 
     # MAX_TOOL_TURNS reached — ask for a final answer without tools
-    log.warning(f"[{task_id}] Reached {MAX_TOOL_TURNS} tool turns — requesting final answer")
+    log.warning(f"[{task_id}] Reached overall tool turn limit (search={search_turns}, fetch={fetch_turns}) — requesting final answer")
     messages.append({
         "role": "user",
         "content": (

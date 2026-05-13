@@ -45,8 +45,10 @@ MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "qa" / "inbox"
 SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "qa" / "system_prompt.md"
 
-# Safety cap: maximum tool calls per task
-MAX_TOOL_TURNS = 3
+# Per-tool call limits for the QA agent
+MAX_SEARCH_TURNS = 3   # max web_search calls per task
+MAX_FETCH_TURNS  = 6   # max web_fetch calls per task
+MAX_TOOL_TURNS = MAX_SEARCH_TURNS + MAX_FETCH_TURNS
 
 # Native tools — the ollama library introspects these functions' type
 # annotations and docstrings to auto-generate the JSON schemas.
@@ -202,18 +204,21 @@ Please review this code and determine if it correctly solves the task."""
         # Run tool-calling loop up to MAX_TOOL_TURNS iterations
         response = None
         empty_response_retries = 0
+        search_turns = 0
+        fetch_turns  = 0
+        active_tools = list(QA_TOOLS)
 
         for turn in range(MAX_TOOL_TURNS):
             result = client.chat_with_tools(
                 model=MODEL,
                 messages=messages,
-                tools=QA_TOOLS,
+                tools=active_tools,
             )
 
             if result["type"] == "text":
                 log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
                 response = result["content"]
-                log.info(f"QA review received ({len(response)} chars) after {turn} tool turn(s)")
+                log.info(f"QA review received ({len(response)} chars) after {turn} tool turn(s) (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS})")
                 break
 
             if result["type"] == "tool_call":
@@ -221,32 +226,41 @@ Please review this code and determine if it correctly solves the task."""
                 arguments = result["arguments"]
 
                 if tool_name == "web_search":
+                    search_turns += 1
                     query = arguments.get("query", "").strip()
                     if not query:
                         log.warning(f"web_search called with empty query — skipping")
                         tool_result = "ERROR: 'query' parameter was empty. Please provide a search query."
                     else:
-                        log.info(f"web_search({turn + 1}/{MAX_TOOL_TURNS}): {query!r}")
+                        log.info(f"web_search({search_turns}/{MAX_SEARCH_TURNS}): {query!r}")
                         tool_result = web_search(query)
                         log.info(f"web_search returned {len(tool_result)} chars")
+                    if search_turns >= MAX_SEARCH_TURNS:
+                        active_tools = [t for t in active_tools if t is not web_search]
+                        log.info(f"web_search limit reached ({MAX_SEARCH_TURNS}) — removed from active tools")
 
                 elif tool_name == "web_fetch":
+                    fetch_turns += 1
                     url = arguments.get("url", "").strip()
                     if not url:
                         log.warning(f"web_fetch called with empty url — skipping")
                         tool_result = "ERROR: 'url' parameter was empty. Please provide a URL."
                     else:
-                        log.info(f"web_fetch({turn + 1}/{MAX_TOOL_TURNS}): {url!r}")
+                        log.info(f"web_fetch({fetch_turns}/{MAX_FETCH_TURNS}): {url!r}")
                         tool_result = web_fetch(url)
                         log.info(f"web_fetch returned {len(tool_result)} chars")
+                    if fetch_turns >= MAX_FETCH_TURNS:
+                        active_tools = [t for t in active_tools if t is not web_fetch]
+                        log.info(f"web_fetch limit reached ({MAX_FETCH_TURNS}) — removed from active tools")
 
                 else:
                     log.warning(f"Model called unknown tool '{tool_name}' — skipping")
                     tool_result = f"ERROR: Tool '{tool_name}' is not available."
 
                 if tool_result.startswith("ERROR:") and tool_name in ("web_search", "web_fetch"):
-                    log.error(f"Tool error — aborting loop: {tool_result}")
-                    raise OllamaError(f"Web tool unavailable: {tool_result}")
+                    # Log the failure but pass the error back to the LLM so it can
+                    # decide how to proceed (retry, skip, or review without the lookup).
+                    log.warning(f"{tool_name} error (passing to LLM): {tool_result}")
 
                 # Append assistant tool call and tool result to history.
                 # Use raw_message if available (preserves the library's native format).
