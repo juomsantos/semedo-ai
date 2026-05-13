@@ -4,7 +4,7 @@
 
 ## Overview
 
-A team of agents coordinated through this shared folder. Agents poll their inboxes on a schedule (via `scheduler.py`) and communicate exclusively through structured task files. Ollama runs at `http://192.168.1.13:11434`.
+A team of agents coordinated through this shared folder. Agents are triggered by a file watcher (immediate) and optionally by a timer-based polling fallback, both managed by `scheduler.py`. Ollama runs at `http://192.168.1.13:11434`.
 
 ## Topology
 
@@ -14,7 +14,7 @@ A team of agents coordinated through this shared folder. Agents poll their inbox
         ▼
    inbox/
         │
-        ▼  polls every 3 min — 3 phases per run
+        ▼  file watcher triggers immediately; timer fallback every 0.5 min
 [Orchestrator: qwen3.5:9b]
    Phase 1 — VALIDATION: scan validation/, group by parent, LLM decides complete|refine|additional_work|redo
    Phase 2 — DEPENDENCY RESOLUTION: unblock tasks whose depends_on are satisfied, wire context_files
@@ -23,8 +23,8 @@ A team of agents coordinated through this shared folder. Agents poll their inbox
    ┌────┼────────────────────┐
    ▼    ▼                    ▼
 [Coder]  [Research]   [Claude Code*]
-qwen2.5  qwen3.5:9b      claude CLI
-coder:7b  + web_search    *requires approval
+qwen3.5  qwen3.5:9b      claude CLI
+  :9b    + web_search    *requires approval
           + web_fetch
    │ chain_to: qa
    ▼
@@ -86,15 +86,16 @@ AI Team/
     run_dashboard.py           ← launcher (reads config.json)
     task_monitor.py            ← filesystem scanner
     templates/index.html       ← dashboard UI
-    static/dashboard.js        ← frontend polling logic
+    static/dashboard.js        ← frontend polling logic + task hierarchy rendering
     static/dashboard.css       ← styling
   logs/                        ← per-agent execution traces at logs/<agent>/general.log
   scripts/
     shared/
       task_io.py               ← task file I/O: read/write/move, dependency resolution, validation grouping
-      ollama_client.py         ← Ollama REST wrapper: chat() and chat_with_tools(); stores last_token_counts after each call
+      ollama_client.py         ← Ollama wrapper: chat() and chat_with_tools(); sets OLLAMA_API_KEY env var before importing ollama library
       token_logger.py          ← appends {ts, task_id, prompt, completion} to logs/<agent>/tokens.jsonl
-      web_search.py            ← Ollama web search + fetch wrapper (research + QA agents); API key from config.json
+      web_search.py            ← web_search() and web_fetch() wrappers delegating to ollama Python library
+      file_watcher.py          ← TaskWatcher: watchdog-based file event monitoring for immediate agent triggering
       logger.py                ← file + stdout logging, UTC timestamps
       config.py                ← config.json loader (ProjectConfig class)
     agent_orchestrator.py      ← 3-phase loop: validate, resolve deps, dispatch
@@ -102,7 +103,7 @@ AI Team/
     agent_research.py
     agent_claude_code.py
     agent_qa.py
-    scheduler.py               ← cross-platform Python polling scheduler
+    scheduler.py               ← cross-platform scheduler: file watcher + optional timer polling
 ```
 
 ## Task File Format
@@ -112,7 +113,7 @@ AI Team/
 id: task_YYYYMMDD_HHMMSS_microseconds   ← microseconds suffix prevents ID collisions
 type: research|code|summarize|review|plan|qa
 priority: high|medium|low
-created_by: claude-cowork|orchestrator|coder|qa
+created_by: claude-cowork|orchestrator|coder|qa|dashboard
 created_at: 2026-05-07T10:00:00
 assigned_to: orchestrator|coder|research|claude-code|qa|pending_approval
 status: pending|dispatched|processing   ← pending=awaiting orchestrator; dispatched=subtasks created, waiting validation; processing=worker running it
@@ -124,6 +125,8 @@ chain_to: qa                  ← optional: agent to hand off to after completio
 retry_count: 0                ← QA retry counter (max 1 before escalating to failed/)
 original_description: ...     ← preserved across retries for QA context
 iteration: 1                  ← validation loop iteration counter (max 5, on parent tasks)
+stall_retry_count: 0          ← infrastructure retry counter (max 2); incremented by recover_stalled_subtasks()
+                                 when a subtask fails due to Ollama timeout/crash, not task-content failure
 validation_context:           ← optional dict: orchestrator reasoning + QA feedback from prior iteration,
                                  injected into redo/refine/additional_work follow-up subtask bodies as
                                  a "## Validation Context" section so workers know what previously failed
@@ -150,7 +153,7 @@ Result files are written to `outbox/` by workers and the orchestrator. Each `.ta
 ---
 task_id: task_YYYYMMDD_HHMMSS_microseconds
 agent: research|coder|qa|claude-code
-model: qwen3.5:9b|qwen2.5-coder:7b|Claude (...)
+model: qwen3.5:9b|Claude (...)
 ---
 
 # Result Title
@@ -197,26 +200,50 @@ Task {parent_task_id} completed after validation.
 - All approved subtask outputs are aggregated in a single parent result file
 - Subtasks are ordered by type: research → code → qa → other types
 - Each subtask result is included in full (not summarized or truncated)
-- Result files correspond to what was originally requested: if code was requested, the code appears; if research was requested, the research findings appear
 - Missing result files are handled gracefully with a `[Result file not found: ...]` placeholder
-
-This ensures that when reviewing a completed task, all deliverables are available in one place rather than scattered across multiple subtask files.
 
 ## Agent Scripts
 
 All scripts live in `scripts/`. Each is standalone and invoked by the scheduler.
 
-| Script | Model | Inbox | Interval | Notes |
+| Script | Model | Inbox | Timer interval* | Notes |
 |---|---|---|---|---|
-| `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 3 min | 3-phase loop per run |
-| `agent_coder.py` | qwen2.5-coder:7b | `agents/coder/inbox/` | 2 min | skips tasks with unresolved `depends_on` |
-| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 2 min | `web_search` + `web_fetch` via Ollama API (max 5 tool turns/task) |
-| `agent_claude_code.py` | Claude Code CLI | `agents/claude-code/inbox/` | 3 min | tasks arrive via manual approval from `pending/` |
-| `agent_qa.py` | qwen3.5:9b | `agents/qa/inbox/` | 2 min | `web_search` + `web_fetch` via Ollama API (max 3 tool turns/task) |
+| `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 0.5 min | 3-phase loop per run |
+| `agent_coder.py` | qwen3.5:9b | `agents/coder/inbox/` | 1.5 min | skips tasks with unresolved `depends_on` |
+| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 1 min | web search: 5 calls + 10 fetches max per task |
+| `agent_claude_code.py` | Claude Code CLI | `agents/claude-code/inbox/` | 2.5 min | tasks arrive via manual approval from `pending/` |
+| `agent_qa.py` | qwen3.5:9b | `agents/qa/inbox/` | 2 min | web search: 3 calls + 6 fetches max per task |
+
+\* Timer intervals only apply when `scheduler.enable_timer_polling: true` in `config.json`. Currently **disabled** — agents are triggered exclusively by the file watcher (see below).
+
+## File Watcher
+
+`scripts/shared/file_watcher.py` provides immediate agent triggering when `.task.md` files appear, replacing the need for constant timer polling.
+
+**How it works:**
+
+`TaskWatcher` (using the `watchdog` library) monitors each task folder for file creation and modification events. When a `.task.md` file is detected, it coalesces rapid bursts within a 0.5-second window, then fires the corresponding agent as a subprocess via `scheduler.trigger_agent()`.
+
+**Folders watched:**
+
+| Folder | Agent triggered |
+|---|---|
+| `inbox/` | orchestrator |
+| `validation/` | orchestrator |
+| `agents/coder/inbox/` | coder |
+| `agents/research/inbox/` | research |
+| `agents/qa/inbox/` | qa |
+| `agents/claude-code/inbox/` | claude-code |
+
+**Startup scan:** on start, the watcher scans each folder for pre-existing `.task.md` files and immediately triggers the corresponding agent, so tasks already waiting when the scheduler starts are not missed.
+
+**Graceful degradation:** if `watchdog` is not installed, a warning is logged and the system falls back to timer-only mode (requires `enable_timer_polling: true`).
+
+**Timer polling toggle:** `config.json → scheduler.enable_timer_polling` (default `true` if missing). Set to `false` to rely exclusively on the file watcher (current production setting).
 
 ## Orchestrator — 3-Phase Loop
 
-Every minute the orchestrator runs three phases in sequence:
+Every cycle (triggered by file watcher or timer) the orchestrator runs three phases in sequence:
 
 **Phase 1 — Validation.** Scans `validation/` for completed subtasks, groups them by `parent_task_id`, then calls the validation LLM (`validation_system_prompt.md`) for each parent. The LLM returns one of four decisions:
 
@@ -229,11 +256,11 @@ Every minute the orchestrator runs three phases in sequence:
 
 Maximum 5 iterations per parent task; forced `complete` at the limit to prevent infinite loops.
 
-If a subtask in `validation/` references a parent task that no longer exists in `processing/`, the orchestrator checks `outbox/` before acting: if the parent is there with `status: complete` (e.g. force-completed before a scheduler restart), the subtask is moved to `outbox/` rather than `failed/`. Only if the parent is missing from both locations is the subtask moved to `failed/`.
+If a subtask in `validation/` references a parent task that no longer exists in `processing/`, the orchestrator checks `outbox/` before acting: if the parent is there with `status: complete`, the subtask is moved to `outbox/` rather than `failed/`. Only if the parent is missing from both locations is the subtask moved to `failed/`.
 
 **Phase 2 — Dependency resolution.** Scans all worker inboxes for tasks with a `depends_on` field. For each, checks whether the dependency's result file exists in `outbox/`. If all dependencies are resolved, it wires the result paths into `context_files` and removes `depends_on`, unblocking the task.
 
-**Phase 3 — Dispatch.** Reads new parent tasks from `inbox/`, calls the decomposition LLM (`system_prompt.md`), creates subtasks in worker inboxes, and moves the parent to `processing/` with `status: dispatched`. The `dispatched` status prevents orphan recovery from re-queueing the parent on subsequent cycles. When research and coder subtasks are created together, the coder task is automatically given `depends_on: [research_task_id]` so it waits for the research output before running. Ollama timeout is set to 240s (`config.json`) to accommodate complex decomposition calls.
+**Phase 3 — Dispatch.** Reads new parent tasks from `inbox/`, calls the decomposition LLM (`system_prompt.md`), creates subtasks in worker inboxes, and moves the parent to `processing/` with `status: dispatched`. The `dispatched` status prevents orphan recovery from re-queueing the parent on subsequent cycles. When research and coder subtasks are created together, the coder task is automatically given `depends_on: [research_task_id]` so it waits for the research output before running. Ollama timeout is set to 360s (`config.json`) to accommodate complex decomposition calls.
 
 If the decomposition LLM determines that research must complete before a good implementation plan can be written, it can set `redecompose_after_research: true` on the parent and dispatch only the research subtask(s). When the research result reaches Phase 1 validation and is approved, `redecompose_with_research()` re-calls the decomposition LLM with the research output injected as context, then dispatches the implementation subtasks. The `redecompose_after_research` flag is cleared immediately after the first re-decomposition to prevent the cycle from triggering again.
 
@@ -255,7 +282,7 @@ Tasks the orchestrator routes to `claude-code` go to `agents/claude-code/pending
 
 **Manually:** move the `.task.md` file from `agents/claude-code/pending/` to `agents/claude-code/inbox/`.
 
-Once in `agents/claude-code/inbox/`, the agent picks it up on its next 3-minute poll.
+Once in `agents/claude-code/inbox/`, the agent picks it up on its next trigger cycle.
 
 ## QA Loop
 
@@ -264,7 +291,7 @@ All code tasks automatically chain through QA:
 1. Orchestrator sets `chain_to: qa` on every code subtask.
 2. Coder completes → creates QA task in `agents/qa/inbox/` with the result file in `context_files`. The QA task inherits `parent_task_id` from the coder task so it is linked to the original parent.
 3. QA: extracts code → executes via subprocess (30s timeout) → reviews with qwen3.5:9b.  
-   May perform up to 3 Ollama web tool calls (`web_search` / `web_fetch`) to look up errors or verify library usage.
+   May perform up to 3 `web_search` + 6 `web_fetch` calls (9 tool turns total) to look up errors or verify library usage.
 4. **PASS** → writes approval to `outbox/`, moves task to `validation/`.
 5. **FAIL, retry_count=0** → creates new coder task with QA feedback, `retry_count=1`. The retry coder task also inherits `parent_task_id` so it remains linked to the original parent.
 6. **FAIL, retry_count=1** → writes failure report to `failed/`, moves task to `validation/`.
@@ -283,15 +310,16 @@ Helper: `scripts/shared/token_logger.py` — `log_tokens(agent_name, task_id, pr
 
 Both modes use `scripts/shared/ollama_client.py`:
 
+**Critical: OLLAMA_API_KEY must be set before the ollama library is imported.** The library reads the env var during module initialisation. `ollama_client.py` is always the first shared import in every agent script, so it sets `os.environ["OLLAMA_API_KEY"]` from `config.json` before `import ollama` runs. Any later attempt to set the key is silently ignored.
+
 **Plain chat** (`OllamaClient.chat()`) — used by orchestrator, coder:
 ```
-POST http://192.168.1.13:11434/api/chat
-{ "model": "...", "messages": [...], "stream": false }
+ollama.Client(host=...).chat(model, messages, options)
 ```
 
 **Tool-calling loop** (`OllamaClient.chat_with_tools()`) — used by research and QA:
 
-Uses the `ollama` Python library (`ollama.Client(host=...)`). Tools are passed as **Python callables** — the library introspects their type annotations and docstrings to auto-generate JSON schemas, so no manual tool-definition dicts are needed.
+Tools are passed as **Python callables** — the ollama library introspects their type annotations and docstrings to auto-generate JSON schemas, so no manual tool-definition dicts are needed.
 
 ```python
 # tools are the actual functions, not JSON dicts
@@ -300,14 +328,14 @@ result = client.chat_with_tools(model, messages, tools=[web_search, web_fetch])
 
 Returns `{"type": "text", ...}` or `{"type": "tool_call", "name": "web_search"|"web_fetch", "arguments": {...}, "raw_message": <Message>}`. The agent executes the tool, appends results to message history, and loops until a text response is received or the turn limit is hit.
 
-**Web tools** (`scripts/shared/web_search.py`) — backed by Ollama's cloud API:
+**Web tools** (`scripts/shared/web_search.py`) — backed by Ollama's cloud API via the ollama Python library:
 
-| Function | Endpoint | Purpose |
+| Function | Backed by | Purpose |
 |---|---|---|
-| `web_search(query, max_results)` | `POST https://ollama.com/api/web_search` | Returns title + URL + snippet for each result |
-| `web_fetch(url)` | `POST https://ollama.com/api/web_fetch` | Returns full page title + content |
+| `web_search(query, max_results)` | `ollama.web_search()` | Returns title + URL + snippet for each result |
+| `web_fetch(url)` | `ollama.web_fetch()` | Returns full page title + content |
 
-API key stored in `config.json` under `web_search.ollama_api_key` and exposed via `config.web_search_api_key()`.
+API key stored in `config.json` under `web_search.ollama_api_key` and exposed via `config.web_search_api_key()`. Set into `OLLAMA_API_KEY` env var by `ollama_client.py` at import time.
 
 ## Claude Code Worker
 
@@ -324,13 +352,15 @@ The preamble instructs the agent to write its complete response as plain text in
 
 The orchestrator uses a lockfile (`processing/orchestrator.lock`) to prevent concurrent instances. Stale locks (dead PID) are cleaned up automatically on the next run.
 
-**Orphan recovery.** Three recovery functions run at startup before Phase 1:
+**Orphan recovery.** Four recovery functions run at startup before Phase 1:
 
 1. `recover_orphaned_tasks()` — scans `processing/` for `.task.md` files with `status: pending`. These are parent tasks whose LLM decomposition call never finished (e.g. killed mid-call). They are moved back to `inbox/` so they re-enter the pipeline. Tasks with `status: dispatched` or `status: processing` are not touched.
 
-2. `recover_stalled_subtasks()` — scans worker inboxes and `processing/` for subtasks whose parent is no longer active. If the parent is in `outbox/` with `status: complete`, the subtask is moved to `outbox/`; if the parent is missing from both `processing/` and `outbox/`, the subtask is moved to `failed/`. This prevents a scheduler restart from converting legitimate completed work into failures.
+2. `recover_processing_subtasks()` — scans `processing/` for subtask files (non-orchestrator) with `status: processing` that are older than 720 seconds (12 minutes). These are tasks claimed by a worker that was killed mid-LLM-call (Ollama timeout, OOM, Ctrl+C) after `mark_processing()` but before finishing. Detection is time-based: 720s comfortably exceeds any realistic LLM call ceiling even with max tool turns. Recovery: reset `status` to `pending` and return the task to the appropriate worker inbox. This is an infrastructure failure recovery path — the parent task's `stall_retry_count` is not incremented here.
 
-3. `recover_orphaned_validation_subtasks()` — sweeps `validation/` for subtasks that were stranded because the in-cycle belt-and-suspenders pass didn't reach them (most commonly QA tasks and retry coders that lacked `parent_task_id` before that propagation was added). Two detection cases: (a) subtask has `parent_task_id` and that parent is in `outbox/` with `status: complete`; (b) subtask has no `parent_task_id` but its `output_path` result file already exists in `outbox/`. Both cases move the subtask to `outbox/` via `mark_completed()`.
+3. `recover_stalled_subtasks()` — scans `failed/` for subtask files (not QA failure reports) whose parent task is still in `processing/`. Groups by parent, then: if the parent has not exceeded `stall_retry_count` (max 2), resets and retries the subtasks by returning them to the worker inbox and incrementing `stall_retry_count` on the parent; if max retries are exhausted, writes a failure report and moves the parent to `failed/`. Subtasks whose parent is already in `outbox/` are silently skipped (stale, not stalled).
+
+4. `recover_orphaned_validation_subtasks()` — sweeps `validation/` for subtasks that were stranded because the in-cycle belt-and-suspenders pass didn't reach them (most commonly QA tasks and retry coders that lacked `parent_task_id` before that propagation was added). Two detection cases: (a) subtask has `parent_task_id` and that parent is in `outbox/` with `status: complete`; (b) subtask has no `parent_task_id` but its `output_path` result file already exists in `outbox/`. Both cases move the subtask to `outbox/` via `mark_completed()`.
 
 **SIGINT isolation.** Each agent subprocess is spawned with `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP` on Windows or `start_new_session=True` on Unix. This isolates agent processes from the scheduler's console signal group, so pressing Ctrl+C in the scheduler terminal stops the scheduler gracefully without propagating the signal to any in-flight agent LLM call.
 
@@ -341,27 +371,38 @@ All runtime settings in `config.json` at the project root, loaded via `scripts/s
 ```json
 {
   "web_search": { "ollama_api_key": "<your Ollama API key>" },
-  "ollama": { "base_url": "http://192.168.1.13:11434", "timeout": 240 },
+  "ollama": { "base_url": "http://192.168.1.13:11434", "timeout": 360 },
   "agents": {
-    "orchestrator": { "model": "qwen3.5:9b" },
-    "coder":        { "model": "qwen2.5-coder:7b" },
-    "research":     { "model": "qwen3.5:9b" },
-    "qa":           { "model": "qwen3.5:9b" },
-    "claude-code":  { "cli": true, "timeout": 300 }
+    "orchestrator": { "model": "qwen3.5:9b",  "process_timeout": 600  },
+    "coder":        { "model": "qwen3.5:9b",  "process_timeout": 600  },
+    "research":     { "model": "qwen3.5:9b",  "process_timeout": 1800 },
+    "qa":           { "model": "qwen3.5:9b",  "process_timeout": 1200 },
+    "claude-code":  { "cli": true, "timeout": 300, "process_timeout": 600 }
   },
+  "scheduler": { "enable_timer_polling": false },
   "dashboard": { "port": 5000, "debug": false, "poll_interval": 1500 }
 }
 ```
 
+**Key config fields:**
+
+- `ollama.timeout` — Ollama request timeout in seconds (360s). Applies to each individual LLM call.
+- `agents.<name>.process_timeout` — scheduler-level kill timeout for the entire agent subprocess. Must be larger than `ollama.timeout × max_tool_turns` to avoid killing an agent mid-tool-loop. Research is set to 1800s (30 min) to accommodate long multi-fetch loops.
+- `scheduler.enable_timer_polling` — when `false` (default), agents are triggered only by the file watcher. Set to `true` to enable interval-based polling as a fallback or supplement.
+
 ## Scheduler Startup Sequence
 
-Before spawning any agent subprocesses, `scheduler.py run()` performs two safety checks:
+Before spawning any agent subprocesses, `scheduler.py run()` performs these steps in order:
 
-1. **Flush `.pyc` caches** — recursively deletes all `__pycache__` directories under `scripts/` so agents always import fresh source bytecode. Prevents stale cached modules from masking syntax errors in recently edited files.
+1. **Ollama availability check** — pings the Ollama server; logs a warning and continues if unreachable (agents will fail on their first LLM call rather than at startup).
 
-2. **Health-check import** — test-imports `scripts/shared/task_io.py` using `importlib.util`. If the import fails (syntax error, truncation, etc.) the scheduler logs a `FATAL` error and returns without starting any agents. This provides an early-warning gate against a class of crash that previously allowed one cached orchestrator cycle to succeed before all agents crashed simultaneously.
+2. **Flush `.pyc` caches** — recursively deletes all `__pycache__` directories under `scripts/` so agents always import fresh source bytecode. Prevents stale cached modules from masking syntax errors in recently edited files.
 
-Both checks run after the Ollama availability check and before `_schedule_agents()`.
+3. **Health-check import** — test-imports `scripts/shared/task_io.py` using `importlib.util`. If the import fails (syntax error, truncation, etc.) the scheduler logs a `FATAL` error and returns without starting any agents.
+
+4. **Initialize file watchers** — starts `TaskWatcher` for all task folders. Falls back gracefully to timer-only mode if `watchdog` is not installed.
+
+5. **Start scheduling loop** — if `enable_timer_polling: true`, also initialises timer-based scheduling.
 
 ## QA Feedback
 
@@ -390,6 +431,7 @@ REST endpoints:
 | `POST /api/pending-approvals/<id>/approve` | Move task to `agents/claude-code/inbox/` |
 | `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
 | `POST /api/tasks/submit` | Create a task in `inbox/` directly from the dashboard |
+| `POST /api/clear-cache` | Delete all task files, logs, and token counters (full reset) |
 
 See `DASHBOARD.md` for full API docs, configuration, and troubleshooting.
 

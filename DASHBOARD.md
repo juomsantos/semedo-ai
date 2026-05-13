@@ -86,7 +86,13 @@ Fields:
 - **Description** — what to build or research (required)
 - **Expected Output** — what a correct result looks like (optional)
 
-On submit, creates a `.task.md` file in `inbox/` and returns the task ID. The new task appears in the Active Tasks tab within ~1.5 seconds. Type and priority fields retain their values for quick follow-up submissions.
+On submit, creates a `.task.md` file in `inbox/` and returns the task ID. The file watcher detects it immediately and triggers the orchestrator; the new task typically appears in the Active Tasks tab within 1–2 seconds. Type and priority fields retain their values for quick follow-up submissions.
+
+### Task Hierarchy View
+The History tab renders tasks in a parent/child tree. Parent tasks expand to show their subtasks (coder, research, QA, retry coders) in the order they were created. This makes it easy to trace the full lifecycle of a request — which subtasks were created, whether QA triggered a retry, and which iteration completed successfully.
+
+### Clear Cached Data
+A **Clear Cached Data** button (available in the dashboard) calls `POST /api/clear-cache`. This deletes all task files across every pipeline folder, clears all agent log files, and resets token counters. Use for a clean slate between test runs. **Irreversible** — all task history and results are permanently deleted.
 
 ### Task Details Modal
 Click any task card to open the detailed view:
@@ -250,6 +256,15 @@ Create a new task in `inbox/` (submits to the orchestrator).
 
 **Error (400):** `{"error": "description is required"}`
 
+### POST /api/clear-cache
+Delete all task files, agent logs, and token counters. Full system reset.
+
+**Response (200):** `{"status": "success"}`
+
+**Error (500):** `{"status": "error", "message": "..."}`
+
+Clears all `.task.md`, `*_result.md`, and `*_qa_failure.md` files from `inbox/`, `processing/`, `validation/`, `outbox/`, `failed/`, and all worker inboxes. Also deletes `logs/<agent>/general.log` and `logs/<agent>/tokens.jsonl` for every agent.
+
 ### GET /api/agents/:agent/logs
 Recent logs for a specific agent.
 
@@ -277,6 +292,8 @@ Dashboard polls all endpoints every **1.5 seconds** for real-time updates:
 - Log files monitored for new entries
 
 Poll interval can be configured in `config.json` (`dashboard.poll_interval` in milliseconds).
+
+Note: the scheduler uses a file watcher to trigger agents immediately when tasks arrive, so tasks submitted via the dashboard are typically picked up by the orchestrator in under 1 second — well before the dashboard's next poll cycle.
 
 ## Data Source
 
