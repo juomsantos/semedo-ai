@@ -1,4 +1,0 @@
-DEPRECATION: torchsde 0.2.5 has a non-standard dependency specifier numpy>=1.19.*; python_version >= "3.7". pip 24.1 will enforce this behaviour change. A possible replacement is to upgrade to a newer version of torchsde or contact the author to suggest that they release a version with a conforming dependency specifiers. Discussion can be found at https://github.com/pypa/pip/issues/12063
-
-[notice] A new release of pip is available: 24.0 -> 26.1.1
-[notice] To update, run: python.exe -m pip install --upgrade pip
