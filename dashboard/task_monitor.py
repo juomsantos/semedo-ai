@@ -78,7 +78,10 @@ class TaskMonitor:
         """Count failed tasks."""
         if not self.failed.exists():
             return 0
-        return len([f for f in self.failed.glob("*.task.md")])
+        return (
+            len([f for f in self.failed.glob("*.task.md")])
+            + len([f for f in self.failed.glob("*_qa_failure.md")])
+        )
 
     def _check_ollama_lock(self) -> Optional[Dict[str, Any]]:
         """Check orchestrator lock file for current PID."""
@@ -134,9 +137,14 @@ class TaskMonitor:
                 if task:
                     tasks.append(task)
         
-        # Failed tasks
+        # Failed tasks — include both orchestrator .task.md failures and
+        # worker *_qa_failure.md reports
         if self.failed.exists():
-            for task_file in sorted(self.failed.glob("*.task.md"), reverse=True)[:limit]:
+            failed_files = sorted(
+                list(self.failed.glob("*.task.md")) + list(self.failed.glob("*_qa_failure.md")),
+                key=lambda p: p.stat().st_mtime, reverse=True
+            )[:limit]
+            for task_file in failed_files:
                 task = self._parse_task_file(task_file, "failed", "failed")
                 if task:
                     tasks.append(task)
