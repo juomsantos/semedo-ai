@@ -48,6 +48,10 @@ class ProjectConfig:
         """Get the Ollama API key for web search."""
         return self._config.get("web_search", {}).get("ollama_api_key", "")
 
+    def scheduler_enable_timer_polling(self) -> bool:
+        """Check if timer-based polling should be enabled in the scheduler."""
+        return self._config.get("scheduler", {}).get("enable_timer_polling", True)
+
     def list_agents(self) -> list[str]:
         """Get list of all configured agents."""
         return list(self._config.get("agents", {}).keys())

@@ -24,6 +24,9 @@
       "timeout": 300
     }
   },
+  "scheduler": {
+    "enable_timer_polling": true
+  },
   "dashboard": {
     "port": 5000,
     "debug": false,

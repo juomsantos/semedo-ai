@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shared.logger import AgentLogger
 from shared.ollama_client import OllamaClient
 from shared.file_watcher import TaskWatcher
+from shared.config import load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
@@ -183,16 +184,31 @@ class AgentScheduler:
         """Thread that manages scheduling and invocation."""
         self.log.info("Scheduler started")
 
+        # Load config to check if timer polling is enabled
+        try:
+            config = load_config()
+            timer_polling_enabled = config.scheduler_enable_timer_polling()
+        except Exception as e:
+            self.log.warning(f"Failed to load scheduler config: {e} — defaulting to timer polling enabled")
+            timer_polling_enabled = True
+
+        if timer_polling_enabled:
+            self.log.info("Timer-based polling enabled")
+        else:
+            self.log.info("Timer-based polling disabled — relying on file watcher only")
+
         while not self.stop_event.wait(1):  # Check every second
-            now = datetime.fromtimestamp(time.time(), tz=timezone.utc)
+            # Only check timer-based scheduling if enabled
+            if timer_polling_enabled:
+                now = datetime.fromtimestamp(time.time(), tz=timezone.utc)
 
-            for script, interval in AGENTS:
-                if now >= self.next_run_times[script]:
-                    # Schedule next run
-                    self.next_run_times[script] = now + timedelta(minutes=interval)
+                for script, interval in AGENTS:
+                    if now >= self.next_run_times[script]:
+                        # Schedule next run
+                        self.next_run_times[script] = now + timedelta(minutes=interval)
 
-                    # Trigger agent (timer-based, since file-watcher runs in parallel)
-                    self.trigger_agent(script, "timer")
+                        # Trigger agent (timer-based, since file-watcher runs in parallel)
+                        self.trigger_agent(script, "timer")
 
         self.log.info("Scheduler stopped")
 
