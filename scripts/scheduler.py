@@ -198,14 +198,15 @@ class AgentScheduler:
         try:
             config = load_config()
             timer_polling_enabled = config.scheduler_enable_timer_polling()
+            self.log.info(f"Config loaded: enable_timer_polling = {timer_polling_enabled}")
         except Exception as e:
-            self.log.warning(f"Failed to load scheduler config: {e} — defaulting to timer polling enabled")
+            self.log.error(f"Failed to load scheduler config: {e} — defaulting to timer polling enabled")
             timer_polling_enabled = True
 
         if timer_polling_enabled:
-            self.log.info("Timer-based polling enabled")
+            self.log.info("Timer-based polling ENABLED")
         else:
-            self.log.info("Timer-based polling disabled — relying on file watcher only")
+            self.log.info("Timer-based polling DISABLED — relying on file watcher only")
 
         while not self.stop_event.wait(1):  # Check every second
             # Only check timer-based scheduling if enabled
