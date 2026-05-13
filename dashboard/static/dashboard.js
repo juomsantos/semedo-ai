@@ -415,6 +415,7 @@ async function submitTask(event) {
         if (response.ok) {
             showSubmitStatus(`Task submitted: ${data.task_id}`, 'success');
             document.getElementById('task-description').value = '';
+            document.getElementById('task-expected-output').value = '';
             // Keep type and priority for quick resubmit
         } else {
             showSubmitStatus(data.error || 'Failed to submit task', 'error');

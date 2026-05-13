@@ -89,6 +89,12 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         # The orchestrator's reasoning (what previously failed) is embedded in this dict.
         qa_validation_context = task["meta"].get("validation_context")
 
+        # Include any context files the coder task itself received (e.g. previous coder
+        # iterations wired in by the orchestrator for refine/additional_work tasks) so
+        # QA sees the full accumulated codebase, not just the latest delta.
+        prev_context = [cf for cf in task["meta"].get("context_files", []) if cf != output_path]
+        qa_context_files = [output_path] + prev_context
+
         create_task_file(
             inbox_path=PROJECT_ROOT / "agents" / "qa" / "inbox",
             task_type="qa",
@@ -99,11 +105,11 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
             chain_to=None,
             retry_count=task["meta"].get("retry_count", 0),
             original_description=task["meta"].get("original_description") or task["body"],
-            context_files=[output_path],
+            context_files=qa_context_files,
             validation_context=qa_validation_context,
             parent_task_id=task["meta"].get("parent_task_id"),
         )
-        log.info("Chained to QA agent")
+        log.info(f"Chained to QA agent with {len(qa_context_files)} context file(s)")
 
     mark_awaiting_validation(task_path)
     log.info(f"Task {task_id} complete -> {output_path} (awaiting validation)")

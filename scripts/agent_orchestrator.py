@@ -27,6 +27,7 @@ Routing rules (enforced via system prompt, not hardcoded):
 import sys
 import json
 import os
+import time
 import atexit
 from pathlib import Path
 
@@ -192,6 +193,28 @@ def parse_routing_decision(response: str) -> tuple[list[dict], bool]:
     return data, redecompose_flag
 
 
+def _sanitize_json_literals(raw: str) -> str:
+    """
+    Replace literal newlines / carriage returns / tabs that appear inside JSON
+    string values with their escape sequences.  The regex matches JSON string
+    literals (including already-escaped sequences via the \\. alternative) so
+    it never double-escapes a '\n' that is already escaped.
+    """
+    import re
+
+    def _fix(m: re.Match) -> str:
+        return (
+            m.group(0)
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
+
+    # "(?:[^"\\]|\\.)*" matches a JSON string including escape sequences.
+    # re.DOTALL makes . match newlines so the unescaped-newline case is caught.
+    return re.sub(r'"(?:[^"\\]|\\.)*"', _fix, raw, flags=re.DOTALL)
+
+
 def parse_validation_decision(response: str) -> dict:
     """
     Parse the orchestrator's validation decision.
@@ -201,11 +224,19 @@ def parse_validation_decision(response: str) -> dict:
       "reasoning": "...",
       "follow_ups": [...]  # Only if decision != "complete"
     }
+
+    Robustness measures applied before json.loads:
+      1. Strip any prose before/after by extracting a ```json ... ``` fence if present.
+      2. Sanitize literal newlines inside string values that would make the JSON invalid.
     """
     import re
 
+    # Extract from code fence if present, otherwise use whole response.
     json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', response, re.DOTALL)
     json_str = json_match.group(1) if json_match else response.strip()
+
+    # Sanitize literal control characters inside string values.
+    json_str = _sanitize_json_literals(json_str)
 
     try:
         data = json.loads(json_str)
@@ -291,6 +322,7 @@ def _extract_qa_verdict(qa_task: dict) -> str:
 
 
 _RETRY_CODER_FAILED = object()  # sentinel: retry coder task ended up in failed/
+_VALIDATION_PARSE_FAILED = object()  # sentinel: validation LLM response unparseable after retry
 
 
 def _find_retry_coder_output(qa_task: dict):
@@ -558,12 +590,41 @@ Evaluate these results and decide if the work is complete. You have {max_iterati
 
     try:
         decision = parse_validation_decision(response)
-    except Exception as e:
-        log.error(f"Failed to parse validation decision for {parent_task_id}: {e}")
-        log.error(f"Raw response: {response[:500]}")
-        return None
+        return decision
+    except Exception as first_err:
+        log.warning(
+            f"Failed to parse validation decision for {parent_task_id} (attempt 1): {first_err}"
+        )
+        log.warning(f"Raw response (first 500 chars): {response[:500]}")
 
-    return decision
+    # --- Retry: ask the LLM to emit only valid JSON ---
+    repair_prompt = (
+        "Your previous response could not be parsed as valid JSON.\n\n"
+        "Original response:\n"
+        f"{response[:2000]}\n\n"
+        "Output ONLY a valid JSON object — no prose, no code fences, no extra fields.\n"
+        'Required schema: {"decision": "complete|refine|additional_work|redo", '
+        '"reasoning": "...", "follow_ups": [...]}  (follow_ups only when decision != complete)\n'
+        "Escape any newlines inside string values as \\n."
+    )
+    try:
+        repair_response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=repair_prompt)
+        log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+        log.info(f"Validation repair response received ({len(repair_response)} chars)")
+    except OllamaError as e:
+        log.error(f"Ollama error during validation repair of {parent_task_id}: {e}")
+        return _VALIDATION_PARSE_FAILED
+
+    try:
+        decision = parse_validation_decision(repair_response)
+        log.info(f"Validation repair succeeded for {parent_task_id}")
+        return decision
+    except Exception as second_err:
+        log.error(
+            f"Failed to parse validation decision for {parent_task_id} (attempt 2, giving up): {second_err}"
+        )
+        log.error(f"Raw repair response (first 500 chars): {repair_response[:500]}")
+        return _VALIDATION_PARSE_FAILED
 
 
 def recover_orphaned_tasks(log: AgentLogger):
@@ -584,6 +645,71 @@ def recover_orphaned_tasks(log: AgentLogger):
                 log.warning(f"Recovered orphaned task {task_file.name} → inbox/")
         except Exception as e:
             log.error(f"Error inspecting {task_file.name} during recovery: {e}")
+
+
+def recover_processing_subtasks(log: AgentLogger):
+    """
+    Recover worker subtasks stuck in processing/ with status:processing.
+
+    This covers the case where a worker process is killed mid-LLM-call (e.g. Ollama
+    timeout, OOM, Ctrl+C) after calling mark_processing() but before calling
+    mark_awaiting_validation() or mark_failed(). The task is left in processing/ with
+    status:processing and no recovery path exists in the other recovery functions
+    (recover_orphaned_tasks only handles status:pending; recover_stalled_subtasks only
+    handles tasks already in failed/).
+
+    Detection strategy: time-based. The Ollama timeout is 240s; even with the maximum
+    number of tool turns the wall-clock ceiling is ~15 min. Any subtask that has been
+    status:processing for longer than STALE_THRESHOLD_SECONDS is safely assumed to be
+    orphaned — the worker that claimed it is gone.
+
+    Recovery: reset status to pending and return the task to the appropriate worker inbox.
+    The existing stall_retry_count mechanism on the parent task is NOT incremented here
+    because this is an infrastructure failure (crash), not a task-content failure.
+    """
+    STALE_THRESHOLD_SECONDS = 720  # 12 min — comfortably above any realistic LLM call
+
+    processing_dir = PROJECT_ROOT / "processing"
+    if not processing_dir.exists():
+        return
+
+    now = time.time()
+
+    for task_file in processing_dir.glob("*.task.md"):
+        # Skip the orchestrator lockfile
+        if task_file.name == "orchestrator.lock":
+            continue
+        try:
+            task = read_task(task_file)
+            meta = task["meta"]
+
+            if meta.get("status") != "processing":
+                continue
+
+            assigned_to = meta.get("assigned_to", "")
+            if assigned_to == "orchestrator":
+                continue  # Orchestrator stalls handled separately via its own lock
+
+            inbox = WORKER_INBOXES.get(assigned_to)
+            if not inbox:
+                log.warning(f"Stuck processing subtask {task_file.name} has unknown worker '{assigned_to}' — skipping")
+                continue
+
+            age_seconds = now - task_file.stat().st_mtime
+            if age_seconds < STALE_THRESHOLD_SECONDS:
+                continue  # Still within normal processing window
+
+            # Task is stale — reset and return to worker inbox
+            meta["status"] = "pending"
+            write_result(str(task_file), task["body"], meta=meta)
+            move_task(task_file, inbox)
+            log.warning(
+                f"Recovered stale processing subtask {task_file.name} "
+                f"(age {int(age_seconds)}s, worker={assigned_to}) → {inbox.relative_to(PROJECT_ROOT)}"
+            )
+
+        except Exception as e:
+            log.error(f"Error inspecting {task_file.name} during processing recovery: {e}")
 
 
 def recover_stalled_subtasks(log: AgentLogger):
@@ -1058,20 +1184,27 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             "reasoning": reasoning,
         }
 
-        # For refine/additional_work, collect previous research outputs so they can be
-        # wired into context_files for the research follow-up. This lets the research agent
-        # actually read what was already produced rather than guessing at it from the description.
+        # For refine/additional_work, collect previous outputs per worker type so they can be
+        # wired into context_files for follow-up tasks. This lets each agent actually read
+        # what was already produced rather than guessing at it from the description.
         # For redo we intentionally omit them — the agent should start completely fresh.
         prev_research_outputs = []
+        prev_coder_outputs = []
         if decision_type in ("refine", "additional_work"):
             completed = get_completed_subtasks_by_parent(PROJECT_ROOT / "validation")
             for subtask in completed.get(parent_task_id, []):
-                if subtask["meta"].get("type") == "research":
-                    output_path = subtask["meta"].get("output_path", "")
-                    if output_path and Path(output_path).exists():
-                        prev_research_outputs.append(output_path)
+                subtask_type = subtask["meta"].get("type")
+                output_path = subtask["meta"].get("output_path", "")
+                if not output_path or not Path(output_path).exists():
+                    continue
+                if subtask_type == "research":
+                    prev_research_outputs.append(output_path)
+                elif subtask_type == "code":
+                    prev_coder_outputs.append(output_path)
             if prev_research_outputs:
                 log.info(f"Wiring {len(prev_research_outputs)} previous research output(s) into research follow-up context")
+            if prev_coder_outputs:
+                log.info(f"Wiring {len(prev_coder_outputs)} previous coder output(s) into coder follow-up context")
 
         for idx, followup in enumerate(follow_ups):
             worker = followup.get("worker")
@@ -1086,13 +1219,16 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             # which already contains the ## Validation Context block — causing it to be
             # duplicated and nested inside ## Task Description in the QA task body.
             original_description = followup.get("description") if followup.get("type") == "code" else None
-            # Research refine/additional_work follow-ups get the previous research outputs
-            # as context files so the agent can build on them rather than starting blind.
-            followup_context_files = (
-                prev_research_outputs
-                if worker == "research" and prev_research_outputs
-                else None
-            )
+            # Pass previous outputs as context so agents can build on prior work rather than
+            # starting blind. Research follow-ups get previous research; coder follow-ups get
+            # previous coder outputs (so both the coder and, via agent_coder's QA chaining,
+            # QA can see the full accumulated codebase, not just the latest delta).
+            if worker == "research" and prev_research_outputs:
+                followup_context_files = prev_research_outputs
+            elif worker == "coder" and prev_coder_outputs:
+                followup_context_files = prev_coder_outputs
+            else:
+                followup_context_files = None
             new_task_path = create_task_file(
                 inbox_path=inbox,
                 task_type=followup.get("type"),
@@ -1264,7 +1400,14 @@ def validation_phase(client: OllamaClient, log: AgentLogger):
             continue
 
         decision = validate_completed_tasks(parent_task_id, completed_subtasks, client, log)
-        if decision:
+        if decision is _VALIDATION_PARSE_FAILED:
+            log.error(
+                f"Validation LLM returned unparseable JSON twice for {parent_task_id} — failing task"
+            )
+            parent_path = PROJECT_ROOT / "processing" / f"{parent_task_id}.task.md"
+            if parent_path.exists():
+                mark_failed(parent_path, PROJECT_ROOT / "failed")
+        elif decision:
             handle_validation_decision(parent_task_id, decision, client, log)
 
 
@@ -1276,6 +1419,7 @@ def main():
     atexit.register(release_lock)  # Ensure lock is released on any exit
 
     recover_orphaned_tasks(log)
+    recover_processing_subtasks(log)
     recover_stalled_subtasks(log)
     recover_orphaned_validation_subtasks(log)
 

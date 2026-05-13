@@ -681,20 +681,27 @@ class TaskMonitor:
                     except Exception:
                         pass
 
-        # Scan failed for failed tasks by this agent
+        # Scan failed/ for failed tasks by this agent.
+        # Note: worker task .task.md files land in outbox/ (swept there after validation),
+        # so *.task.md in failed/ only catches orchestrator-level failures.
+        # Worker failure reports use the naming pattern <id>_qa_failure.md or _result.md.
         if self.failed.exists():
             for task_file in sorted(self.failed.glob("*.task.md"), reverse=True):
                 task = self._parse_task_file(task_file, "failed", "failed")
                 if task and (task.get("assigned_to") == agent or (agent == "orchestrator" and task.get("assigned_to") == "orchestrator")):
-                    # Try to read the result file
                     task_id = task["id"]
-                    result_file = self.failed / f"{task_id}_result.md"
+                    # Try standard result file, then agent-specific failure report
                     output = ""
-                    if result_file.exists():
-                        try:
-                            output = result_file.read_text(encoding="utf-8")[:2000]
-                        except Exception:
-                            pass
+                    for candidate in [
+                        self.failed / f"{task_id}_result.md",
+                        self.failed / f"{task_id}_qa_failure.md",
+                    ]:
+                        if candidate.exists():
+                            try:
+                                output = candidate.read_text(encoding="utf-8")[:2000]
+                            except Exception:
+                                pass
+                            break
 
                     failed_tasks.append({
                         "id": task_id,
@@ -704,6 +711,33 @@ class TaskMonitor:
                         "output": output,
                         "body_preview": task["body_preview"],
                     })
+
+        # For worker agents: also scan outbox/*_result.md for FAIL verdicts.
+        # QA (and future agents) write failure reports to output_path (outbox) with
+        # agent metadata, so they appear in both completed and failed sections.
+        if agent != "orchestrator" and self.outbox.exists():
+            for result_file in sorted(self.outbox.glob("*_result.md"), reverse=True):
+                try:
+                    result_content = result_file.read_text(encoding="utf-8")
+                    if not result_content.startswith("---"):
+                        continue
+                    parts = result_content.split("---", 2)
+                    if len(parts) < 2:
+                        continue
+                    metadata = self._parse_yaml_frontmatter(parts[1].strip())
+                    if metadata.get("agent") == agent and metadata.get("verdict") == "FAIL":
+                        task_id = result_file.stem.replace("_result", "")
+                        output = parts[2].strip()[:2000] if len(parts) >= 3 else result_content[:2000]
+                        failed_tasks.append({
+                            "id": task_id,
+                            "type": "qa",
+                            "created_at": metadata.get("created_at", ""),
+                            "priority": "medium",
+                            "output": output,
+                            "body_preview": "",
+                        })
+                except Exception:
+                    pass
 
         return {
             "agent": agent,

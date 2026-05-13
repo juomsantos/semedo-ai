@@ -103,8 +103,9 @@ def extract_code(result_content: str) -> tuple:
     Returns (code, language) where language is 'python', 'javascript', or 'unknown'.
     For multi-file results, returns the first substantial code block found.
     """
-    # Try JavaScript/TypeScript blocks first
-    match = re.search(r"```(?:javascript|js|typescript|ts)\s*(.*?)\s*```", result_content, re.DOTALL)
+    # Try JavaScript/TypeScript blocks first.
+    # \b after the language name prevents ```js from matching ```json (js is a prefix of json).
+    match = re.search(r"```(?:javascript|js|typescript|ts)\b\s*(.*?)\s*```", result_content, re.DOTALL)
     if match:
         return match.group(1), "javascript"
 
@@ -185,10 +186,12 @@ def execute_code(code: str, language: str, log: AgentLogger):
 
 
 def review_with_llm(
-    task_description: str, code: str, language: str, execution: dict, client: OllamaClient, log: AgentLogger, task_id: str = "unknown"
+    task_description: str, full_result: str, execution, prior_results: list,
+    client: OllamaClient, log: AgentLogger, task_id: str = "unknown"
 ) -> dict:
     """
     Call qwen3.5:9b to review code with optional web search.
+    full_result is the raw coder result file content — all files included.
     Return {verdict: 'PASS'|'FAIL', feedback: str}.
     """
     system_prompt = load_system_prompt()
@@ -208,19 +211,22 @@ def review_with_llm(
         if execution["stderr"]:
             execution_section += f"\n**stderr:**\n```\n{execution['stderr']}\n```\n"
 
-    code_lang = language if language in ("python", "javascript") else ""
+    prior_context_section = ""
+    if prior_results:
+        prior_context_section = "\n## Prior Work (Previous Iterations — for context)\n\n"
+        for i, prior in enumerate(prior_results, 1):
+            prior_context_section += f"### Prior Result {i}\n\n{prior}\n\n"
+
     user_message = f"""## Original Task
 
 {task_description}
+{prior_context_section}
+## Latest Code Produced
 
-## Code Produced
-
-```{code_lang}
-{code}
-```
+{full_result}
 
 {execution_section}
-Please review this code and determine if it correctly solves the task."""
+Please review the latest code (and prior work context if provided) to determine if the submission correctly and completely solves the original task."""
 
     try:
         # Build initial messages for the agentic loop
@@ -359,7 +365,7 @@ Please review this code and determine if it correctly solves the task."""
         return {"verdict": "FAIL", "feedback": f"QA review failed: {str(e)}"}
 
 
-def handle_failure(task: dict, feedback: str, code: str, language: str, execution: dict, log: AgentLogger):
+def handle_failure(task: dict, feedback: str, full_result: str, language: str, execution, log: AgentLogger):
     """
     Handle a failed QA review.
     If retry_count==0: create new coder task with QA feedback
@@ -401,10 +407,31 @@ Please fix these issues and try again."""
         )
         log.info(f"Created retry task {new_task_path.name}")
 
+        # Write a failure record to output_path so the dashboard and orchestrator
+        # can find a result even for first-attempt failures (retry_count=0).
+        task_output_path = task["meta"].get("output_path")
+        if task_output_path:
+            first_fail_report = f"""# QA Failure — Retry Dispatched
+
+## Task ID
+{task_id}
+
+## QA Feedback
+{feedback}
+
+## Action Taken
+A retry coder task has been dispatched ({new_task_path.name}).
+"""
+            write_result(
+                task_output_path,
+                first_fail_report,
+                meta={"task_id": task_id, "agent": AGENT_NAME, "verdict": "FAIL"},
+            )
+            log.info(f"First-attempt failure record written to output_path: {task_output_path}")
+
     else:
         log.info(f"Task {task_id} failed QA on retry. Writing failure report...")
 
-        code_lang = language if language in ("python", "javascript") else ""
         if execution is _NOT_EXECUTED:
             execution_block = "*(Not executed — static analysis only)*"
         else:
@@ -424,9 +451,7 @@ Please fix these issues and try again."""
 {task['meta'].get('original_description', task['body'])}
 
 ## Code Produced
-```{code_lang}
-{code}
-```
+{full_result}
 
 ## Execution Output
 {execution_block}
@@ -438,9 +463,23 @@ Please fix these issues and try again."""
 Code failed QA review on the second attempt. Requires manual intervention or redesign.
 """
 
-        output_path = PROJECT_ROOT / "failed" / f"{task_id}_qa_failure.md"
-        write_result(output_path, failure_report)
-        log.info(f"Failure report written to {output_path}")
+        # Write to failed/ for direct browsing
+        archive_path = PROJECT_ROOT / "failed" / f"{task_id}_qa_failure.md"
+        write_result(archive_path, failure_report)
+        log.info(f"Failure report archived to {archive_path}")
+
+        # ALSO write to output_path so the dashboard and orchestrator can find the
+        # result via the task's output_path field (outbox/<id>_result.md).
+        # Without this the dashboard shows "Result file not found" and the QA Results
+        # tab has no record of the failure.
+        task_output_path = task["meta"].get("output_path")
+        if task_output_path:
+            write_result(
+                task_output_path,
+                failure_report,
+                meta={"task_id": task_id, "agent": AGENT_NAME, "verdict": "FAIL"},
+            )
+            log.info(f"Failure report written to output_path: {task_output_path}")
 
 
 def process_task(task: dict, client: OllamaClient, log: AgentLogger):
@@ -456,7 +495,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     task_path = mark_processing(task["path"])
 
-    # Get the context file (the coder's result file)
+    # Get the context files (first = latest coder output; rest = prior iteration outputs)
     context_files = task["meta"].get("context_files", [])
     if not context_files:
         log.error(f"Task {task_id} has no context files (no coder result to review)")
@@ -470,15 +509,30 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         return
 
     result_content = coder_result_path.read_text(encoding="utf-8")
-    code, language = extract_code(result_content)
 
-    if not code.strip():
-        log.error(f"No code found in {coder_result_path}")
+    if not result_content.strip():
+        log.error(f"Empty result file: {coder_result_path}")
         mark_failed(task_path)
         return
 
-    log.info(f"Extracted {len(code)} chars of {language} code")
+    log.info(f"Loaded primary result: {len(result_content)} chars from {coder_result_path.name}")
 
+    # Extract a single code block for Python execution only.
+    # The full result_content (all files) is what gets sent to the LLM reviewer.
+    code, language = extract_code(result_content)
+    log.info(f"Detected language: {language} (used for execution gate only)")
+
+    # Read any additional context files (prior coder iterations) for the LLM reviewer
+    prior_results = []
+    for cf in context_files[1:]:
+        cf_path = Path(cf)
+        if cf_path.exists():
+            prior_results.append(cf_path.read_text(encoding="utf-8"))
+            log.info(f"Loaded prior context: {cf_path.name}")
+        else:
+            log.warning(f"Prior context file not found, skipping: {cf}")
+
+    # Python execution only — extract_code gives us the runnable snippet
     execution = execute_code(code, language, log)
     if execution is _NOT_EXECUTED:
         log.info("Code execution skipped (static analysis only)")
@@ -486,7 +540,8 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         log.info(f"Code executed: exit_code={execution['exit_code']}, timed_out={execution['timed_out']}")
 
     task_description = task["meta"].get("original_description") or task["body"]
-    review = review_with_llm(task_description, code, language, execution, client, log, task_id)
+    # Pass the full result_content to the LLM — it sees every file the coder produced
+    review = review_with_llm(task_description, result_content, execution, prior_results, client, log, task_id)
     log.info(f"QA verdict: {review['verdict']}")
 
     if review["verdict"] == "PASS":
@@ -494,7 +549,6 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         if not output_path:
             output_path = str(PROJECT_ROOT / "outbox" / f"{task_id}_qa_result.md")
 
-        code_lang = language if language in ("python", "javascript") else ""
         if execution is _NOT_EXECUTED:
             exec_summary = "*(Not executed — reviewed via static analysis)*"
         else:
@@ -505,9 +559,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 Task {task_id} has passed QA review.
 
 ## Code
-```{code_lang}
-{code}
-```
+{result_content}
 
 ## Execution Result
 {exec_summary}
@@ -519,7 +571,7 @@ This code is ready for production.
         mark_awaiting_validation(task_path)
         log.info(f"Task {task_id} passed QA → {output_path} (awaiting validation)")
     else:
-        handle_failure(task, review["feedback"], code, language, execution, log)
+        handle_failure(task, review["feedback"], result_content, language, execution, log)
         mark_awaiting_validation(task_path)
         log.info(f"Task {task_id} failed QA → handled (awaiting validation)")
 
