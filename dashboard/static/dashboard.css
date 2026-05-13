@@ -47,6 +47,29 @@ body {
     color: #ff6b6b;
 }
 
+.btn-clear-cache {
+    background: #f5a623;
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.btn-clear-cache:hover {
+    background: #e09000;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(245, 166, 35, 0.3);
+}
+
+.btn-clear-cache:active {
+    transform: translateY(0);
+}
+
 /* Container */
 .container {
     max-width: 1400px;

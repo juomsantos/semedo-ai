@@ -37,6 +37,12 @@ function setupEventListeners() {
         submitForm.addEventListener('submit', submitTask);
     }
 
+    // Clear cache button
+    const clearCacheBtn = document.getElementById('clear-cache-btn');
+    if (clearCacheBtn) {
+        clearCacheBtn.addEventListener('click', handleClearCache);
+    }
+
     // Modal close
     document.querySelector('.modal-close').addEventListener('click', closeModal);
     document.getElementById('task-modal').addEventListener('click', (e) => {
@@ -633,6 +639,88 @@ function setPollStatus(success) {
         status.classList.add('error');
         status.textContent = '● Error';
     }
+}
+
+// Handle clear cache button click
+async function handleClearCache() {
+    const confirmed = confirm('Are you sure? This will delete all task files, logs, and token data.\n\nThis action cannot be undone.');
+    if (!confirmed) return;
+
+    const btn = document.getElementById('clear-cache-btn');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Clearing...';
+    btn.style.opacity = '0.6';
+
+    try {
+        const response = await fetch('/api/clear-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.message || 'Failed to clear cache');
+        }
+
+        // Auto-refresh dashboard
+        setTimeout(() => {
+            location.reload();
+        }, 500);
+    } catch (error) {
+        showNotification(`Error: ${error.message}`, 'error');
+        btn.disabled = false;
+        btn.textContent = originalText;
+        btn.style.opacity = '1';
+    }
+}
+
+// Show notification/toast message
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    const bgColor = type === 'success' ? '#4facfe' : (type === 'error' ? '#fa709a' : '#667eea');
+
+    notification.style.cssText = `
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        padding: 14px 20px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 13px;
+        z-index: 2000;
+        animation: notificationSlideIn 0.3s ease;
+        background: ${bgColor};
+        color: white;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        max-width: 300px;
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+
+    // Add animation keyframes if not already present
+    if (!document.getElementById('notification-styles')) {
+        const style = document.createElement('style');
+        style.id = 'notification-styles';
+        style.textContent = `
+            @keyframes notificationSlideIn {
+                from {
+                    transform: translateX(400px);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // Remove notification after 2.5 seconds
+    setTimeout(() => {
+        notification.remove();
+    }, 2500);
 }
 
 // Format age in human-readable format

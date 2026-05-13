@@ -752,7 +752,10 @@ def recover_orphaned_validation_subtasks(log: AgentLogger):
             # Case 2: no parent_task_id but result file already written to outbox/
             # (covers QA tasks and QA-dispatched retry coders that completed but
             # were never swept by the normal validation loop)
-            if not orphaned:
+            # Guard: only applies when there is no parent_task_id — subtasks with
+            # a live parent must go through the normal validation loop even if
+            # their result file already exists in outbox/.
+            if not orphaned and not parent_task_id:
                 output_path = meta.get("output_path")
                 if output_path and Path(output_path).exists():
                     orphaned = True

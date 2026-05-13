@@ -7,10 +7,12 @@ Endpoints:
   GET /api/tasks/<id>      - Task detail with logs and result
   GET /api/agents          - Per-agent statistics
   GET /api/agents/<name>/logs  - Agent logs
+  POST /api/clear-cache    - Clear all cached data (task files, logs, tokens)
   GET /                    - Serve dashboard UI
 """
 
 import sys
+import shutil
 from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -211,6 +213,58 @@ def submit_task():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/clear-cache", methods=["POST"])
+def clear_cache():
+    """Clear all cached data: task files, logs, and token counters."""
+    try:
+        # Define folders to clear
+        folders_to_clear = [
+            PROJECT_ROOT / "inbox",
+            PROJECT_ROOT / "processing",
+            PROJECT_ROOT / "validation",
+            PROJECT_ROOT / "outbox",
+            PROJECT_ROOT / "failed",
+            PROJECT_ROOT / "agents" / "orchestrator" / "inbox",
+            PROJECT_ROOT / "agents" / "coder" / "inbox",
+            PROJECT_ROOT / "agents" / "research" / "inbox",
+            PROJECT_ROOT / "agents" / "qa" / "inbox",
+            PROJECT_ROOT / "agents" / "claude-code" / "inbox",
+            PROJECT_ROOT / "agents" / "claude-code" / "pending",
+        ]
+
+        # Clear task files
+        for folder in folders_to_clear:
+            if folder.exists():
+                for file_path in folder.glob("*.task.md"):
+                    file_path.unlink()
+                for file_path in folder.glob("*_result.md"):
+                    file_path.unlink()
+
+        # Clear log files
+        log_folders = [
+            PROJECT_ROOT / "logs" / "orchestrator",
+            PROJECT_ROOT / "logs" / "coder",
+            PROJECT_ROOT / "logs" / "research",
+            PROJECT_ROOT / "logs" / "qa",
+            PROJECT_ROOT / "logs" / "claude-code",
+            PROJECT_ROOT / "logs" / "scheduler",
+        ]
+
+        for log_folder in log_folders:
+            if log_folder.exists():
+                log_file = log_folder / "general.log"
+                if log_file.exists():
+                    log_file.unlink()
+                tokens_file = log_folder / "tokens.jsonl"
+                if tokens_file.exists():
+                    tokens_file.unlink()
+
+        return jsonify({"status": "success"}), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""
@@ -239,6 +293,7 @@ def main(port: int = 5000, debug: bool = False):
     print(f"  POST /api/pending-approvals/<id>/approve - Approve task")
     print(f"  POST /api/pending-approvals/<id>/reject - Reject task")
     print(f"  POST /api/tasks/submit   - Submit new task")
+    print(f"  POST /api/clear-cache    - Clear all cached data")
     print()
 
     app.run(host="0.0.0.0", port=port, debug=debug)

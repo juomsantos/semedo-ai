@@ -31,9 +31,9 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 # Agent definitions: (script_name, interval_minutes)
 AGENTS = [
     ("agent_orchestrator.py", 0.5),
-    ("agent_coder.py", 2),
-    ("agent_research.py", 2),
-    ("agent_claude_code.py", 2),
+    ("agent_coder.py", 1.5),
+    ("agent_research.py", 1),
+    ("agent_claude_code.py", 2.5),
     ("agent_qa.py", 2),
 ]
 
