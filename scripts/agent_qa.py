@@ -97,36 +97,62 @@ def load_system_prompt() -> str:
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def extract_code(result_content: str) -> str:
+def extract_code(result_content: str) -> tuple:
     """
-    Strip markdown fences from result file content to get raw Python.
-    Looks for ```python ... ``` or ``` ... ``` code blocks.
+    Strip markdown fences from result file content.
+    Returns (code, language) where language is 'python', 'javascript', or 'unknown'.
+    For multi-file results, returns the first substantial code block found.
     """
-    # Try to extract code from ```python ... ``` first
+    # Try JavaScript/TypeScript blocks first
+    match = re.search(r"```(?:javascript|js|typescript|ts)\s*(.*?)\s*```", result_content, re.DOTALL)
+    if match:
+        return match.group(1), "javascript"
+
+    # Try Python blocks
     match = re.search(r"```python\s*(.*?)\s*```", result_content, re.DOTALL)
     if match:
-        return match.group(1)
+        return match.group(1), "python"
 
-    # Fall back to generic ``` ... ```
-    match = re.search(r"```\s*(.*?)\s*```", result_content, re.DOTALL)
+    # Fall back to generic ``` ... ``` (non-JSON blocks preferred)
+    # Try to find a non-json, non-empty block
+    for m in re.finditer(r"```(\w*)\s*(.*?)\s*```", result_content, re.DOTALL):
+        lang_hint = m.group(1).lower()
+        code = m.group(2)
+        if lang_hint == "json" or not code.strip():
+            continue
+        if lang_hint in ("shell", "bash", "sh"):
+            continue
+        return code, "unknown"
+
+    # Last resort: any code block
+    match = re.search(r"```\w*\s*(.*?)\s*```", result_content, re.DOTALL)
     if match:
-        return match.group(1)
+        return match.group(1), "unknown"
 
     # If no code blocks found, return the whole content as a fallback
-    return result_content
+    return result_content, "unknown"
 
 
-def execute_code(code: str, log: AgentLogger) -> dict:
+_NOT_EXECUTED = object()  # sentinel — signals "no execution attempted"
+
+
+def execute_code(code: str, language: str, log: AgentLogger):
     """
-    Run code via subprocess. Return {stdout, stderr, exit_code, timed_out}.
-    Uses a temp file to avoid eval/exec security issues.
-    30 second timeout enforced.
+    Execute code for Python only. All other languages are skipped per QA policy:
+    the LLM reviewer performs static analysis instead.
+
+    Returns either:
+      - A dict {stdout, stderr, exit_code, timed_out} for Python
+      - The _NOT_EXECUTED sentinel for every other language
     """
+    if language != "python":
+        log.info(f"Language '{language}' — skipping execution (static analysis only per QA policy)")
+        return _NOT_EXECUTED
+
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
             f.write(code)
             temp_path = f.name
-
         try:
             result = subprocess.run(
                 [sys.executable, temp_path],
@@ -159,7 +185,7 @@ def execute_code(code: str, log: AgentLogger) -> dict:
 
 
 def review_with_llm(
-    task_description: str, code: str, execution: dict, client: OllamaClient, log: AgentLogger, task_id: str = "unknown"
+    task_description: str, code: str, language: str, execution: dict, client: OllamaClient, log: AgentLogger, task_id: str = "unknown"
 ) -> dict:
     """
     Call qwen3.5:9b to review code with optional web search.
@@ -167,31 +193,33 @@ def review_with_llm(
     """
     system_prompt = load_system_prompt()
 
-    execution_report = f"### Execution Output\n"
-    if execution["timed_out"]:
-        execution_report += "**Timed out** after 30 seconds\n"
-    elif execution["exit_code"] == 0:
-        execution_report += f"**Exit code:** 0 (success)\n"
+    if execution is _NOT_EXECUTED:
+        execution_section = "### Execution Output\n*Not executed — static analysis only (non-Python code).*\n"
     else:
-        execution_report += f"**Exit code:** {execution['exit_code']}\n"
+        execution_section = "### Execution Output\n"
+        if execution["timed_out"]:
+            execution_section += "**Timed out** after 30 seconds\n"
+        elif execution["exit_code"] == 0:
+            execution_section += "**Exit code:** 0 (success)\n"
+        else:
+            execution_section += f"**Exit code:** {execution['exit_code']}\n"
+        if execution["stdout"]:
+            execution_section += f"\n**stdout:**\n```\n{execution['stdout']}\n```\n"
+        if execution["stderr"]:
+            execution_section += f"\n**stderr:**\n```\n{execution['stderr']}\n```\n"
 
-    if execution["stdout"]:
-        execution_report += f"\n**stdout:**\n```\n{execution['stdout']}\n```\n"
-    if execution["stderr"]:
-        execution_report += f"\n**stderr:**\n```\n{execution['stderr']}\n```\n"
-
+    code_lang = language if language in ("python", "javascript") else ""
     user_message = f"""## Original Task
 
 {task_description}
 
 ## Code Produced
 
-```python
+```{code_lang}
 {code}
 ```
 
-{execution_report}
-
+{execution_section}
 Please review this code and determine if it correctly solves the task."""
 
     try:
@@ -331,7 +359,7 @@ Please review this code and determine if it correctly solves the task."""
         return {"verdict": "FAIL", "feedback": f"QA review failed: {str(e)}"}
 
 
-def handle_failure(task: dict, feedback: str, code: str, execution: dict, log: AgentLogger):
+def handle_failure(task: dict, feedback: str, code: str, language: str, execution: dict, log: AgentLogger):
     """
     Handle a failed QA review.
     If retry_count==0: create new coder task with QA feedback
@@ -358,11 +386,12 @@ The QA agent found the following issues:
 
 Please fix these issues and try again."""
 
+        lang_label = {"python": "Python", "javascript": "JavaScript/Node.js"}.get(language, "code")
         new_task_path = create_task_file(
             inbox_path=coder_inbox,
             task_type="code",
             description=retry_prompt,
-            expected_output="Fixed Python code that passes QA review",
+            expected_output=f"Fixed {lang_label} that passes QA review",
             assigned_to="coder",
             created_by=AGENT_NAME,
             chain_to="qa",
@@ -375,6 +404,17 @@ Please fix these issues and try again."""
     else:
         log.info(f"Task {task_id} failed QA on retry. Writing failure report...")
 
+        code_lang = language if language in ("python", "javascript") else ""
+        if execution is _NOT_EXECUTED:
+            execution_block = "*(Not executed — static analysis only)*"
+        else:
+            execution_block = (
+                f"- **Exit Code:** {execution['exit_code']}\n"
+                f"- **Timed Out:** {execution['timed_out']}\n\n"
+                f"### stdout\n```\n{execution['stdout'] or '(none)'}\n```\n\n"
+                f"### stderr\n```\n{execution['stderr'] or '(none)'}\n```"
+            )
+
         failure_report = f"""# QA Failure Report
 
 ## Task ID
@@ -384,23 +424,12 @@ Please fix these issues and try again."""
 {task['meta'].get('original_description', task['body'])}
 
 ## Code Produced
-```python
+```{code_lang}
 {code}
 ```
 
 ## Execution Output
-- **Exit Code:** {execution['exit_code']}
-- **Timed Out:** {execution['timed_out']}
-
-### stdout
-```
-{execution['stdout'] or '(none)'}
-```
-
-### stderr
-```
-{execution['stderr'] or '(none)'}
-```
+{execution_block}
 
 ## QA Feedback
 {feedback}
@@ -441,20 +470,23 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         return
 
     result_content = coder_result_path.read_text(encoding="utf-8")
-    code = extract_code(result_content)
+    code, language = extract_code(result_content)
 
     if not code.strip():
         log.error(f"No code found in {coder_result_path}")
         mark_failed(task_path)
         return
 
-    log.info(f"Extracted {len(code)} chars of code")
+    log.info(f"Extracted {len(code)} chars of {language} code")
 
-    execution = execute_code(code, log)
-    log.info(f"Code executed: exit_code={execution['exit_code']}, timed_out={execution['timed_out']}")
+    execution = execute_code(code, language, log)
+    if execution is _NOT_EXECUTED:
+        log.info("Code execution skipped (static analysis only)")
+    else:
+        log.info(f"Code executed: exit_code={execution['exit_code']}, timed_out={execution['timed_out']}")
 
     task_description = task["meta"].get("original_description") or task["body"]
-    review = review_with_llm(task_description, code, execution, client, log, task_id)
+    review = review_with_llm(task_description, code, language, execution, client, log, task_id)
     log.info(f"QA verdict: {review['verdict']}")
 
     if review["verdict"] == "PASS":
@@ -462,18 +494,23 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         if not output_path:
             output_path = str(PROJECT_ROOT / "outbox" / f"{task_id}_qa_result.md")
 
+        code_lang = language if language in ("python", "javascript") else ""
+        if execution is _NOT_EXECUTED:
+            exec_summary = "*(Not executed — reviewed via static analysis)*"
+        else:
+            exec_summary = f"- **Exit Code:** {execution['exit_code']}\n- **Status:** Success"
+
         qa_result = f"""# QA Approval
 
 Task {task_id} has passed QA review.
 
 ## Code
-```python
+```{code_lang}
 {code}
 ```
 
 ## Execution Result
-- **Exit Code:** {execution['exit_code']}
-- **Status:** Success
+{exec_summary}
 
 This code is ready for production.
 """
@@ -482,7 +519,7 @@ This code is ready for production.
         mark_awaiting_validation(task_path)
         log.info(f"Task {task_id} passed QA → {output_path} (awaiting validation)")
     else:
-        handle_failure(task, review["feedback"], code, execution, log)
+        handle_failure(task, review["feedback"], code, language, execution, log)
         mark_awaiting_validation(task_path)
         log.info(f"Task {task_id} failed QA → handled (awaiting validation)")
 
