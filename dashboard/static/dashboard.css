@@ -35,6 +35,7 @@ body {
     gap: 30px;
     font-size: 13px;
     opacity: 0.9;
+    align-items: center;
 }
 
 .poll-status {
@@ -1027,4 +1028,74 @@ body {
     white-space: pre-wrap;
     word-wrap: break-word;
     margin: 0;
+}
+
+/* Task Hierarchy Tree View */
+.expand-toggle {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 6px;
+    margin-right: 4px;
+    transition: color 0.2s ease, transform 0.2s ease;
+    display: inline-block;
+    min-width: 16px;
+    text-align: center;
+}
+
+.expand-toggle:hover {
+    color: #0066cc;
+    transform: scale(1.1);
+}
+
+.expand-toggle.expanded {
+    transform: rotate(90deg);
+}
+
+.expand-toggle-placeholder {
+    display: inline-block;
+    width: 16px;
+    margin-right: 4px;
+}
+
+.task-label-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: #f0f0f0;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 8px;
+}
+
+.task-item.subtask {
+    background: rgba(0, 0, 0, 0.02);
+    border-left-width: 2px;
+}
+
+.task-item.subtask:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.task-iteration {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: #e0e7ff;
+    color: #667eea;
+}
+
+.task-subtasks {
+    display: contents;
+}
+
+.task-subtasks[style*="display: none"] {
+    display: none !important;
 }

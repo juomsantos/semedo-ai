@@ -363,7 +363,9 @@ class TaskMonitor:
                 "assigned_to": assigned_to or metadata.get("assigned_to", "unknown"),
                 "status": status,
                 "location": location,
+                "parent_task_id": metadata.get("parent_task_id"),
                 "retry_count": int(metadata.get("retry_count", 0)),
+                "iteration": metadata.get("iteration"),
                 "chain_to": metadata.get("chain_to", None),
                 "output_path": metadata.get("output_path", ""),
                 "age_seconds": int(age_seconds),
@@ -390,8 +392,8 @@ class TaskMonitor:
                     if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
                         value = value[1:-1]
 
-                    # Convert retry_count to int
-                    if key == "retry_count":
+                    # Convert numeric fields to int
+                    if key in ("retry_count", "iteration"):
                         try:
                             value = int(value)
                         except ValueError:
@@ -478,6 +480,8 @@ class TaskMonitor:
                     "assigned_to": "pending_approval",
                     "status": "pending_approval",
                     "location": "agents/claude-code/pending",
+                    "parent_task_id": metadata.get("parent_task_id"),
+                    "iteration": metadata.get("iteration"),
                     "age_seconds": int(age_seconds),
                     "body": body,
                 })

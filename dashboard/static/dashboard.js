@@ -51,6 +51,39 @@ function setupEventListeners() {
     document.getElementById('payload-modal').addEventListener('click', (e) => {
         if (e.target.id === 'payload-modal') closePayloadModal();
     });
+
+    // Task list event delegation
+    setupTaskListDelegation();
+}
+
+// Setup event delegation for task lists (handles both active and history tabs)
+function setupTaskListDelegation() {
+    // Active tasks container
+    const activeTasks = document.getElementById('active-tasks');
+    if (activeTasks) {
+        activeTasks.addEventListener('click', handleTaskListClick);
+    }
+
+    // History tasks container
+    const historyTasks = document.getElementById('history-tasks');
+    if (historyTasks) {
+        historyTasks.addEventListener('click', handleTaskListClick);
+    }
+}
+
+// Handle clicks in task lists (show detail or expand/collapse)
+function handleTaskListClick(e) {
+    const expandBtn = e.target.closest('.expand-toggle');
+    if (expandBtn) {
+        e.stopPropagation();
+        toggleTaskExpansion(expandBtn);
+        return;
+    }
+
+    const taskItem = e.target.closest('.task-item');
+    if (taskItem) {
+        showTaskDetail(taskItem.dataset.taskId);
+    }
 }
 
 // Start real-time polling
@@ -235,23 +268,18 @@ async function updateActiveTasks() {
     try {
         const response = await fetch('/api/tasks?status=processing');
         const data = await response.json();
-        
+
         const container = document.getElementById('active-tasks');
         const count = document.getElementById('active-count');
-        
+
         count.textContent = `${data.count} ${data.count === 1 ? 'task' : 'tasks'}`;
-        
+
         if (data.tasks.length === 0) {
             container.innerHTML = '<p class="no-data">No tasks processing</p>';
             return;
         }
-        
-        container.innerHTML = data.tasks.map(task => createTaskElement(task)).join('');
-        
-        // Add click handlers
-        container.querySelectorAll('.task-item').forEach(el => {
-            el.addEventListener('click', () => showTaskDetail(el.dataset.taskId));
-        });
+
+        container.innerHTML = renderTaskHierarchy(data.tasks);
     } catch (error) {
         console.error('Error updating active tasks:', error);
     }
@@ -261,26 +289,21 @@ async function updateActiveTasks() {
 async function updateHistoryTasks() {
     try {
         const filter = document.getElementById('history-filter').value;
-        const url = filter 
+        const url = filter
             ? `/api/tasks?status=${filter}&limit=50`
             : '/api/tasks?limit=50';
-        
+
         const response = await fetch(url);
         const data = await response.json();
-        
+
         const container = document.getElementById('history-tasks');
-        
+
         if (data.tasks.length === 0) {
             container.innerHTML = '<p class="no-data">No tasks</p>';
             return;
         }
-        
-        container.innerHTML = data.tasks.map(task => createTaskElement(task)).join('');
-        
-        // Add click handlers
-        container.querySelectorAll('.task-item').forEach(el => {
-            el.addEventListener('click', () => showTaskDetail(el.dataset.taskId));
-        });
+
+        container.innerHTML = renderTaskHierarchy(data.tasks);
     } catch (error) {
         console.error('Error updating history:', error);
     }
@@ -441,11 +464,117 @@ function showNotification(message, type) {
     }, 3000);
 }
 
-// Create task element HTML
+// Build task hierarchy from flat list
+function buildTaskHierarchy(tasks) {
+    const taskMap = {};
+    const roots = [];
+
+    // Index all tasks by ID
+    tasks.forEach(task => {
+        taskMap[task.id] = { ...task, subtasks: [] };
+    });
+
+    // Organize into parent-child relationships
+    tasks.forEach(task => {
+        if (task.parent_task_id && taskMap[task.parent_task_id]) {
+            taskMap[task.parent_task_id].subtasks.push(taskMap[task.id]);
+        } else {
+            roots.push(taskMap[task.id]);
+        }
+    });
+
+    return roots;
+}
+
+// Render task hierarchy as HTML
+function renderTaskHierarchy(tasks) {
+    const roots = buildTaskHierarchy(tasks);
+    return roots.map(task => renderTaskWithChildren(task)).join('');
+}
+
+// Render a task and its subtasks (always render, use CSS to hide/show)
+function renderTaskWithChildren(task, depth = 0) {
+    const isParent = task.subtasks && task.subtasks.length > 0;
+    const isExpanded = isParent && isTaskExpanded(task.id);
+    const indent = depth > 0 ? `style="margin-left: ${depth * 32}px;"` : '';
+    const subtasksDisplay = isParent && !isExpanded ? 'style="display: none;"' : '';
+
+    let html = `
+        <div class="task-item ${task.status.toLowerCase()}" data-task-id="${task.id}" ${indent}>
+            <div class="task-header">
+                ${isParent ? `<button class="expand-toggle ${isExpanded ? 'expanded' : ''}">▶</button>` : '<span class="expand-toggle-placeholder"></span>'}
+                <span class="task-id">${task.id}</span>
+                <span class="task-status ${task.status.toLowerCase()}">${task.status}</span>
+                <span class="task-label-badge">${isParent ? 'Parent' : task.parent_task_id ? 'Subtask' : ''}</span>
+            </div>
+            <div class="task-meta">
+                <span class="task-type">${task.type}</span>
+                <span class="task-priority priority-${task.priority}">${task.priority}</span>
+                <span class="task-age">${formatAge(task.age_seconds)}</span>
+                ${task.iteration ? `<span class="task-iteration">Iteration ${task.iteration}</span>` : ''}
+            </div>
+            <div class="task-info">
+                <span class="task-creator">${task.created_by}</span>
+                <span class="task-assigned">→ ${task.assigned_to}</span>
+                ${task.retry_count > 0 ? `<span class="task-retry">Retry ${task.retry_count}</span>` : ''}
+            </div>`;
+
+    // Add background color for subtasks
+    if (task.parent_task_id) {
+        html = html.replace('class="task-item', 'class="task-item subtask');
+    }
+
+    html += `</div>`;
+
+    // Always render subtasks (they may be hidden by CSS/display)
+    if (isParent) {
+        const subtasksHtml = task.subtasks.map(subtask => renderTaskWithChildren(subtask, depth + 1)).join('');
+        // Wrap subtasks in a container for easier hiding/showing
+        html += `<div class="task-subtasks" data-parent-id="${task.id}" ${subtasksDisplay}>${subtasksHtml}</div>`;
+    }
+
+    return html;
+}
+
+// Check if task is expanded in localStorage
+function isTaskExpanded(taskId) {
+    return localStorage.getItem(`task_expanded_${taskId}`) === 'true';
+}
+
+// Toggle task expansion and persist to localStorage
+function toggleTaskExpansion(button) {
+    const taskItem = button.closest('.task-item');
+    const taskId = taskItem.dataset.taskId;
+    const isCurrentlyExpanded = button.classList.contains('expanded');
+
+    if (isCurrentlyExpanded) {
+        // Collapse
+        button.classList.remove('expanded');
+        localStorage.setItem(`task_expanded_${taskId}`, 'false');
+
+        // Hide the subtasks container
+        const subtasksContainer = taskItem.nextElementSibling;
+        if (subtasksContainer && subtasksContainer.classList.contains('task-subtasks')) {
+            subtasksContainer.style.display = 'none';
+        }
+    } else {
+        // Expand
+        button.classList.add('expanded');
+        localStorage.setItem(`task_expanded_${taskId}`, 'true');
+
+        // Show the subtasks container
+        const subtasksContainer = taskItem.nextElementSibling;
+        if (subtasksContainer && subtasksContainer.classList.contains('task-subtasks')) {
+            subtasksContainer.style.display = '';
+        }
+    }
+}
+
+// Create task element HTML (legacy, now mostly unused)
 function createTaskElement(task) {
     const statusClass = task.status.toLowerCase();
     const ageStr = formatAge(task.age_seconds);
-    
+
     return `
         <div class="task-item ${statusClass}" data-task-id="${task.id}">
             <div class="task-header">
