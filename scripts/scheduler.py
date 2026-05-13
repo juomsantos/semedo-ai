@@ -47,7 +47,6 @@ class AgentScheduler:
         self.next_run_times = {}
         self.watcher = None
         self._watcher_enabled = False
-        self._init_schedules()
 
     def _check_ollama_availability(self) -> bool:
         """Check if Ollama server is reachable. Log and print results."""
@@ -205,6 +204,7 @@ class AgentScheduler:
 
         if timer_polling_enabled:
             self.log.info("Timer-based polling ENABLED")
+            self._init_schedules()
         else:
             self.log.info("Timer-based polling DISABLED — relying on file watcher only")
 
