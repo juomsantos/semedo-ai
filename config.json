@@ -25,7 +25,7 @@
     }
   },
   "scheduler": {
-    "enable_timer_polling": false
+    "enable_timer_polling": true
   },
   "dashboard": {
     "port": 5000,

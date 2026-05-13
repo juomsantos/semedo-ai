@@ -59,7 +59,7 @@ class TaskWatcher:
         self._callbacks[folder_path] = (callback, agent_name)
 
     def start(self):
-        """Start watching all registered folders."""
+        """Start watching all registered folders and scan for existing files."""
         for folder_path in self._callbacks.keys():
             if folder_path.exists():
                 handler = _TaskCreatedHandler(
@@ -67,6 +67,12 @@ class TaskWatcher:
                     on_task_created=self._on_task_created,
                 )
                 self.observer.schedule(handler, str(folder_path), recursive=False)
+
+                # Scan for any existing .task.md files and trigger callback
+                # This ensures pre-existing tasks are picked up when watcher starts
+                for task_file in folder_path.glob("*.task.md"):
+                    self._on_task_created(folder_path)
+                    break  # Only trigger once per folder (coalescing)
 
         self.observer.start()
 
