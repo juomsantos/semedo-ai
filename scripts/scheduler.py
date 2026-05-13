@@ -83,7 +83,7 @@ class AgentScheduler:
         try:
             self.watcher = TaskWatcher(coalescence_window=0.5)
 
-            # Watch inbox/ for orchestrator tasks
+            # Watch inbox/ for new tasks submitted by users/dashboard
             inbox = PROJECT_ROOT / "inbox"
             if inbox.exists():
                 self.watcher.watch_folder(
@@ -91,7 +91,17 @@ class AgentScheduler:
                     callback=lambda: self.trigger_agent("agent_orchestrator.py", "file-watcher"),
                     agent_name="orchestrator",
                 )
-                self.log.info(f"Watching {inbox} for orchestrator tasks")
+                self.log.info(f"Watching {inbox} for new submitted tasks")
+
+            # Watch validation/ for completed subtasks that need orchestrator review
+            validation = PROJECT_ROOT / "validation"
+            if validation.exists():
+                self.watcher.watch_folder(
+                    folder_path=validation,
+                    callback=lambda: self.trigger_agent("agent_orchestrator.py", "file-watcher"),
+                    agent_name="orchestrator",
+                )
+                self.log.info(f"Watching {validation} for completed subtasks")
 
             # Watch worker inboxes
             worker_folders = {
