@@ -157,8 +157,15 @@ class AgentScheduler:
             self.log.error(f"Script not found: {script_path}")
             return
 
+        # Derive agent name from script filename (e.g. agent_research.py → research)
+        agent_name = script.replace("agent_", "").replace(".py", "")
         try:
-            self.log.info(f"Starting {script}")
+            process_timeout = load_config().agent_process_timeout(agent_name)
+        except Exception:
+            process_timeout = 300
+
+        try:
+            self.log.info(f"Starting {script} (process_timeout={process_timeout}s)")
 
             # Isolate subprocess from the scheduler's console signal group so that
             # a Ctrl+C or SIGINT reaching the scheduler does not propagate to agents
@@ -173,7 +180,7 @@ class AgentScheduler:
                 [sys.executable, str(script_path)],
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 minute timeout
+                timeout=process_timeout,
                 **kwargs,
             )
 
@@ -185,7 +192,7 @@ class AgentScheduler:
                     self.log.error(f"  stderr: {result.stderr[:200]}")
 
         except subprocess.TimeoutExpired:
-            self.log.error(f"Timeout {script} (exceeded 300s)")
+            self.log.error(f"Timeout {script} (exceeded {process_timeout}s)")
         except Exception as e:
             self.log.error(f"Exception running {script}: {e}")
 

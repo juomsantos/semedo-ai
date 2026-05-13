@@ -393,6 +393,9 @@ The QA agent found the following issues:
 Please fix these issues and try again."""
 
         lang_label = {"python": "Python", "javascript": "JavaScript/Node.js"}.get(language, "code")
+        # Pass the QA task's context_files (coder's previous output + prior iterations)
+        # so the retry coder can see exactly what it wrote and make targeted fixes.
+        retry_context_files = task["meta"].get("context_files", [])
         new_task_path = create_task_file(
             inbox_path=coder_inbox,
             task_type="code",
@@ -404,6 +407,7 @@ Please fix these issues and try again."""
             retry_count=1,
             original_description=original_description,
             parent_task_id=task["meta"].get("parent_task_id"),
+            context_files=retry_context_files,
         )
         log.info(f"Created retry task {new_task_path.name}")
 
@@ -449,9 +453,6 @@ A retry coder task has been dispatched ({new_task_path.name}).
 
 ## Original Task Description
 {task['meta'].get('original_description', task['body'])}
-
-## Code Produced
-{full_result}
 
 ## Execution Output
 {execution_block}
@@ -557,9 +558,6 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         qa_result = f"""# QA Approval
 
 Task {task_id} has passed QA review.
-
-## Code
-{result_content}
 
 ## Execution Result
 {exec_summary}

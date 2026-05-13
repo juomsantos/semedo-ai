@@ -44,6 +44,12 @@ class ProjectConfig:
         agent_config = self._config.get("agents", {}).get(agent_name, {})
         return agent_config.get("timeout", self.ollama_timeout())
 
+    def agent_process_timeout(self, agent_name: str) -> int:
+        """Get the scheduler process-kill timeout for an agent.
+        Defaults to 300s if not set. Should be > ollama_timeout * max_tool_turns."""
+        agent_config = self._config.get("agents", {}).get(agent_name, {})
+        return agent_config.get("process_timeout", 300)
+
     def web_search_api_key(self) -> str:
         """Get the Ollama API key for web search."""
         return self._config.get("web_search", {}).get("ollama_api_key", "")

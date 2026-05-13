@@ -8,20 +8,25 @@
   },
   "agents": {
     "orchestrator": {
-      "model": "qwen3.5:9b"
+      "model": "qwen3.5:9b",
+      "process_timeout": 600
     },
     "coder": {
-      "model": "qwen3.5:9b"
+      "model": "qwen3.5:9b",
+      "process_timeout": 600
     },
     "research": {
-      "model": "qwen3.5:9b"
+      "model": "qwen3.5:9b",
+      "process_timeout": 1800
     },
     "qa": {
-      "model": "qwen3.5:9b"
+      "model": "qwen3.5:9b",
+      "process_timeout": 1200
     },
     "claude-code": {
       "cli": true,
-      "timeout": 300
+      "timeout": 300,
+      "process_timeout": 600
     }
   },
   "scheduler": {

@@ -235,10 +235,9 @@ def clear_cache():
         # Clear task files
         for folder in folders_to_clear:
             if folder.exists():
-                for file_path in folder.glob("*.task.md"):
-                    file_path.unlink()
-                for file_path in folder.glob("*_result.md"):
-                    file_path.unlink()
+                for pattern in ("*.task.md", "*_result.md", "*_qa_failure.md"):
+                    for file_path in folder.glob(pattern):
+                        file_path.unlink()
 
         # Clear log files
         log_folders = [
