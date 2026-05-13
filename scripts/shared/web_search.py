@@ -1,8 +1,10 @@
 """
 web_search.py — Ollama web search and web fetch wrappers.
 
-Uses Ollama's cloud API (https://ollama.com/api/web_search and /api/web_fetch).
-Requires an Ollama API key configured in config.json under web_search.ollama_api_key.
+Delegates to the ollama Python library's web_search() and web_fetch() functions,
+which call Ollama's cloud API using the correct versioned endpoints internally.
+Requires an Ollama API key configured in config.json under web_search.ollama_api_key
+(exposed as the OLLAMA_API_KEY environment variable, which the library reads).
 
 Both functions are designed to be passed directly as native tools to the ollama
 library's chat() call — their type annotations and docstrings are used to
@@ -15,7 +17,6 @@ Usage:
 """
 
 import os
-import requests
 
 # Load API key from config and expose via OLLAMA_API_KEY env var
 # (the ollama library reads this env var for cloud API calls)
@@ -25,17 +26,9 @@ try:
     if _api_key:
         os.environ["OLLAMA_API_KEY"] = _api_key
 except Exception:
-    _api_key = os.environ.get("OLLAMA_API_KEY", "")
+    pass  # fall back to whatever is already in the environment
 
-_SEARCH_URL = "https://ollama.com/api/web_search"
-_FETCH_URL  = "https://ollama.com/api/web_fetch"
-_TIMEOUT_SEARCH = 15  # seconds
-_TIMEOUT_FETCH  = 20
-
-
-def _api_key_or_error() -> str | None:
-    """Return the API key, or None if not configured."""
-    return os.environ.get("OLLAMA_API_KEY", "") or None
+import ollama as _ollama
 
 
 def web_search(query: str, max_results: int = 5) -> str:
@@ -56,38 +49,29 @@ def web_search(query: str, max_results: int = 5) -> str:
             <content snippet>
         Or an error message string if the search fails.
     """
-    api_key = _api_key_or_error()
-    if not api_key:
+    if not os.environ.get("OLLAMA_API_KEY"):
         return (
             "ERROR: OLLAMA_API_KEY is not configured. "
             "Add 'web_search.ollama_api_key' to config.json."
         )
 
     try:
-        resp = requests.post(
-            _SEARCH_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={"query": query, "max_results": max_results},
-            timeout=_TIMEOUT_SEARCH,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.exceptions.Timeout:
-        return f"ERROR: Web search timed out after {_TIMEOUT_SEARCH}s for query: {query!r}"
-    except requests.exceptions.HTTPError as e:
-        return f"ERROR: Web search HTTP error — {e}"
+        response = _ollama.web_search(query, max_results=max_results)
+        results = response.results if hasattr(response, "results") else response.get("results", [])
     except Exception as e:
         return f"ERROR: Web search failed — {e}"
 
-    results = data.get("results", [])
     if not results:
         return f"No results found for query: {query!r}"
 
     lines = [f"Search results for: **{query}**\n"]
     for i, r in enumerate(results, start=1):
-        title   = r.get("title", "(no title)")
-        url     = r.get("url", "")
-        content = r.get("content", "").strip()
+        # Support both object-style and dict-style results
+        title   = getattr(r, "title",   None) or r.get("title",   "(no title)")
+        url     = getattr(r, "url",     None) or r.get("url",     "")
+        content = getattr(r, "content", None) or r.get("content", "")
+        if content:
+            content = content.strip()
         lines.append(f"## {i}. {title}")
         if url:
             lines.append(f"URL: {url}")
@@ -112,30 +96,19 @@ def web_fetch(url: str) -> str:
         A markdown-formatted string with the page title and main content.
         Or an error message string if the fetch fails.
     """
-    api_key = _api_key_or_error()
-    if not api_key:
+    if not os.environ.get("OLLAMA_API_KEY"):
         return (
             "ERROR: OLLAMA_API_KEY is not configured. "
             "Add 'web_search.ollama_api_key' to config.json."
         )
 
     try:
-        resp = requests.post(
-            _FETCH_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={"url": url},
-            timeout=_TIMEOUT_FETCH,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.exceptions.Timeout:
-        return f"ERROR: Web fetch timed out after {_TIMEOUT_FETCH}s for URL: {url}"
-    except requests.exceptions.HTTPError as e:
-        return f"ERROR: Web fetch HTTP error — {e}"
+        response = _ollama.web_fetch(url)
+        title   = getattr(response, "title",   None) or response.get("title",   "(no title)")
+        content = getattr(response, "content", None) or response.get("content", "")
+        if content:
+            content = content.strip()
     except Exception as e:
         return f"ERROR: Web fetch failed — {e}"
-
-    title   = data.get("title", "(no title)")
-    content = data.get("content", "").strip()
 
     return f"# {title}\nURL: {url}\n\n{content}"
