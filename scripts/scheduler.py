@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from shared.logger import AgentLogger
 from shared.ollama_client import OllamaClient
+from shared.file_watcher import TaskWatcher
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
@@ -43,6 +44,8 @@ class AgentScheduler:
         self.log = AgentLogger("scheduler")
         self.stop_event = Event()
         self.next_run_times = {}
+        self.watcher = None
+        self._watcher_enabled = False
         self._init_schedules()
 
     def _check_ollama_availability(self) -> bool:
@@ -73,6 +76,69 @@ class AgentScheduler:
             # First run after a small delay to avoid thundering herd
             self.next_run_times[script] = now + timedelta(seconds=5)
             self.log.info(f"Scheduled {script} to run every {interval} minute(s)")
+
+    def _init_watchers(self):
+        """Initialize file system watchers for immediate task detection."""
+        try:
+            self.watcher = TaskWatcher(coalescence_window=0.5)
+
+            # Watch inbox/ for orchestrator tasks
+            inbox = PROJECT_ROOT / "inbox"
+            if inbox.exists():
+                self.watcher.watch_folder(
+                    folder_path=inbox,
+                    callback=lambda: self.trigger_agent("agent_orchestrator.py", "file-watcher"),
+                    agent_name="orchestrator",
+                )
+                self.log.info(f"Watching {inbox} for orchestrator tasks")
+
+            # Watch worker inboxes
+            worker_folders = {
+                "agent_coder.py": PROJECT_ROOT / "agents" / "coder" / "inbox",
+                "agent_research.py": PROJECT_ROOT / "agents" / "research" / "inbox",
+                "agent_qa.py": PROJECT_ROOT / "agents" / "qa" / "inbox",
+                "agent_claude_code.py": PROJECT_ROOT / "agents" / "claude-code" / "inbox",
+            }
+
+            for script, folder in worker_folders.items():
+                if folder.exists():
+                    self.watcher.watch_folder(
+                        folder_path=folder,
+                        callback=lambda s=script: self.trigger_agent(s, "file-watcher"),
+                        agent_name=script.replace("agent_", "").replace(".py", ""),
+                    )
+                    self.log.info(f"Watching {folder} for tasks")
+
+            self.watcher.start()
+            self._watcher_enabled = True
+            self.log.info("File watcher initialized and started")
+
+        except ImportError:
+            self.log.warning(
+                "watchdog not installed — file watching disabled. "
+                "Run: pip install watchdog>=3.0.0"
+            )
+        except Exception as e:
+            self.log.warning(f"Failed to initialize file watcher: {e} — falling back to timer-only mode")
+
+    def trigger_agent(self, script: str, reason: str = "timer"):
+        """
+        Trigger an agent to run immediately.
+
+        Args:
+            script: Agent script name (e.g., "agent_orchestrator.py")
+            reason: Trigger reason for logging (e.g., "timer" or "file-watcher")
+        """
+        self.log.info(f"Triggering {script} ({reason})")
+        now = datetime.fromtimestamp(time.time(), tz=timezone.utc)
+
+        # Reset timer to prevent immediate re-run
+        for s, interval in AGENTS:
+            if s == script:
+                self.next_run_times[script] = now + timedelta(minutes=interval)
+                break
+
+        Thread(target=self._run_agent, args=(script,), daemon=True).start()
 
     def _run_agent(self, script: str):
         """Run an agent script as a subprocess."""
@@ -125,8 +191,8 @@ class AgentScheduler:
                     # Schedule next run
                     self.next_run_times[script] = now + timedelta(minutes=interval)
 
-                    # Run agent in a separate thread to avoid blocking
-                    Thread(target=self._run_agent, args=(script,), daemon=True).start()
+                    # Trigger agent (timer-based, since file-watcher runs in parallel)
+                    self.trigger_agent(script, "timer")
 
         self.log.info("Scheduler stopped")
 
@@ -163,12 +229,24 @@ class AgentScheduler:
             print(msg)
             return  # Abort — do not start agents
 
+        # Initialize file watchers for immediate task detection
+        self._init_watchers()
+
         try:
             self._schedule_agents()
         except KeyboardInterrupt:
             self.log.info("Shutdown requested (Ctrl+C)")
             self.stop_event.set()
             time.sleep(1)  # Give threads time to clean up
+
+            # Stop file watchers if running
+            if self.watcher:
+                try:
+                    self.watcher.stop()
+                    self.log.info("File watcher stopped")
+                except Exception as e:
+                    self.log.error(f"Error stopping file watcher: {e}")
+
             self.log.info("Scheduler exited cleanly")
 
 
