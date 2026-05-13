@@ -1,6 +1,6 @@
 # AI Team — Multi-Agent Architecture
 
-> Last updated: 2026-05-10
+> Last updated: 2026-05-13
 
 ## Overview
 
@@ -23,11 +23,12 @@ A team of agents coordinated through this shared folder. Agents poll their inbox
    ┌────┼────────────────────┐
    ▼    ▼                    ▼
 [Coder]  [Research]   [Claude Code*]
-qwen2.5  qwen3.5:9b    claude CLI
-coder:7b  + web search   *requires approval
+qwen2.5  qwen3.5:9b      claude CLI
+coder:7b  + web_search    *requires approval
+          + web_fetch
    │ chain_to: qa
    ▼
-[QA Agent: qwen3.5:9b + web search]
+[QA Agent: qwen3.5:9b + web_search + web_fetch]
    - Extracts code, executes via subprocess (30s timeout)
    - Reviews with qwen3.5:9b; may search for error/library docs
    - PASS → validation/  (awaits orchestrator sign-off)
@@ -93,7 +94,7 @@ AI Team/
       task_io.py               ← task file I/O: read/write/move, dependency resolution, validation grouping
       ollama_client.py         ← Ollama REST wrapper: chat() and chat_with_tools(); stores last_token_counts after each call
       token_logger.py          ← appends {ts, task_id, prompt, completion} to logs/<agent>/tokens.jsonl
-      web_search.py            ← DuckDuckGo search wrapper (research + QA agents)
+      web_search.py            ← Ollama web search + fetch wrapper (research + QA agents); API key from config.json
       logger.py                ← file + stdout logging, UTC timestamps
       config.py                ← config.json loader (ProjectConfig class)
     agent_orchestrator.py      ← 3-phase loop: validate, resolve deps, dispatch
@@ -209,9 +210,9 @@ All scripts live in `scripts/`. Each is standalone and invoked by the scheduler.
 |---|---|---|---|---|
 | `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 3 min | 3-phase loop per run |
 | `agent_coder.py` | qwen2.5-coder:7b | `agents/coder/inbox/` | 2 min | skips tasks with unresolved `depends_on` |
-| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 2 min | web search via DuckDuckGo (max 5 searches/task) |
+| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 2 min | `web_search` + `web_fetch` via Ollama API (max 5 tool turns/task) |
 | `agent_claude_code.py` | Claude Code CLI | `agents/claude-code/inbox/` | 3 min | tasks arrive via manual approval from `pending/` |
-| `agent_qa.py` | qwen3.5:9b | `agents/qa/inbox/` | 2 min | web search via DuckDuckGo (max 3 searches/task) |
+| `agent_qa.py` | qwen3.5:9b | `agents/qa/inbox/` | 2 min | `web_search` + `web_fetch` via Ollama API (max 3 tool turns/task) |
 
 ## Orchestrator — 3-Phase Loop
 
@@ -263,7 +264,7 @@ All code tasks automatically chain through QA:
 1. Orchestrator sets `chain_to: qa` on every code subtask.
 2. Coder completes → creates QA task in `agents/qa/inbox/` with the result file in `context_files`. The QA task inherits `parent_task_id` from the coder task so it is linked to the original parent.
 3. QA: extracts code → executes via subprocess (30s timeout) → reviews with qwen3.5:9b.  
-   May perform up to 3 DuckDuckGo searches to look up errors or verify library usage.
+   May perform up to 3 Ollama web tool calls (`web_search` / `web_fetch`) to look up errors or verify library usage.
 4. **PASS** → writes approval to `outbox/`, moves task to `validation/`.
 5. **FAIL, retry_count=0** → creates new coder task with QA feedback, `retry_count=1`. The retry coder task also inherits `parent_task_id` so it remains linked to the original parent.
 6. **FAIL, retry_count=1** → writes failure report to `failed/`, moves task to `validation/`.
@@ -289,11 +290,24 @@ POST http://192.168.1.13:11434/api/chat
 ```
 
 **Tool-calling loop** (`OllamaClient.chat_with_tools()`) — used by research and QA:
+
+Uses the `ollama` Python library (`ollama.Client(host=...)`). Tools are passed as **Python callables** — the library introspects their type annotations and docstrings to auto-generate JSON schemas, so no manual tool-definition dicts are needed.
+
+```python
+# tools are the actual functions, not JSON dicts
+result = client.chat_with_tools(model, messages, tools=[web_search, web_fetch])
 ```
-POST http://192.168.1.13:11434/api/chat
-{ "model": "...", "messages": [...], "tools": [...], "stream": false }
-```
-Returns `{"type": "text", ...}` or `{"type": "tool_call", "name": "web_search", "arguments": {...}}`. The agent executes the search, appends results to message history, and loops until a text response is received or the turn limit is hit.
+
+Returns `{"type": "text", ...}` or `{"type": "tool_call", "name": "web_search"|"web_fetch", "arguments": {...}, "raw_message": <Message>}`. The agent executes the tool, appends results to message history, and loops until a text response is received or the turn limit is hit.
+
+**Web tools** (`scripts/shared/web_search.py`) — backed by Ollama's cloud API:
+
+| Function | Endpoint | Purpose |
+|---|---|---|
+| `web_search(query, max_results)` | `POST https://ollama.com/api/web_search` | Returns title + URL + snippet for each result |
+| `web_fetch(url)` | `POST https://ollama.com/api/web_fetch` | Returns full page title + content |
+
+API key stored in `config.json` under `web_search.ollama_api_key` and exposed via `config.web_search_api_key()`.
 
 ## Claude Code Worker
 
@@ -326,6 +340,7 @@ All runtime settings in `config.json` at the project root, loaded via `scripts/s
 
 ```json
 {
+  "web_search": { "ollama_api_key": "<your Ollama API key>" },
   "ollama": { "base_url": "http://192.168.1.13:11434", "timeout": 240 },
   "agents": {
     "orchestrator": { "model": "qwen3.5:9b" },

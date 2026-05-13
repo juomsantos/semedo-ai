@@ -105,5 +105,5 @@ class _TaskCreatedHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         """Triggered when a file is created."""
-        if event.is_file and event.src_path.endswith(".task.md"):
+        if not event.is_directory and event.src_path.endswith(".task.md"):
             self.on_task_created(self.folder_path)

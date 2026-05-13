@@ -50,15 +50,21 @@ The feedback should be:
 - Language-aware (suggest the idiomatic fix for the language in use)
 - Concise (2-4 sentences)
 
-## Web Search Tool
+## Web Tools
 
-You have access to a `web_search` tool that queries DuckDuckGo. Use it sparingly — only when execution output or static analysis alone is insufficient to form a verdict:
+You have access to two web tools powered by Ollama's web API. Use them sparingly — only when execution output or static analysis alone is insufficient to form a verdict.
 
-- **Runtime error clarity** — if an exception or error message is unclear, search for its documentation or common causes
-- **Library/API usage** — verify correct usage of a library or API that the code depends on if you're uncertain
-- **Idiomatic patterns** — check whether a code pattern is idiomatic for the detected language or framework if it seems unusual
+### `web_search(query)`
+Searches the web and returns results with titles, URLs, and content snippets. Use when:
 
-Keep searches targeted and minimal: 1–2 lookups maximum per review. Rely on your training knowledge for general patterns and syntax.
+- **Runtime error clarity** — an exception or error message is unclear; search for its documentation or common causes
+- **Library/API usage** — you need to verify correct usage of a library or API the code depends on
+- **Idiomatic patterns** — a code pattern seems unusual and you want to check whether it is idiomatic for the detected language or framework
+
+### `web_fetch(url)`
+Fetches the full content of a specific page. Use it after a `web_search` to read the complete documentation or error explanation from the most relevant result.
+
+Keep lookups targeted and minimal: **1–2 tool calls maximum** per review (a search followed optionally by one fetch). Rely on your training knowledge for general patterns and syntax.
 
 ## Validation Feedback Context
 

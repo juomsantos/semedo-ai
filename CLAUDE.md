@@ -14,16 +14,16 @@ A three-tier multi-agent system:
 2. **Orchestrator** (`qwen3.5:9b`) — polls `inbox/` every 3 min, runs 3 phases per cycle: validate completed work → resolve task dependencies → decompose and dispatch new tasks
 3. **Workers:**
    - `qwen2.5-coder:7b` (coder) — code generation, polls every 2 min; skips tasks with unresolved dependencies
-   - `qwen3.5:9b` (research) — research, summarization, Q&A, polls every 2 min; live web search via DuckDuckGo (up to 5 searches/task)
+   - `qwen3.5:9b` (research) — research, summarization, Q&A, polls every 2 min; live `web_search` + `web_fetch` via Ollama API (up to 5 tool turns/task)
    - `claude CLI` (claude-code) — complex/reasoning tasks, polls every 3 min; tasks require manual approval first (land in `agents/claude-code/pending/` before `inbox/`)
-   - `qwen3.5:9b` (qa) — code review + execution testing, polls every 2 min; live web search for error lookup (up to 3 searches/task)
+   - `qwen3.5:9b` (qa) — code review + execution testing, polls every 2 min; live `web_search` + `web_fetch` via Ollama API for error lookup (up to 3 tool turns/task)
 
 4. **Dashboard** (`Flask`) — real-time web UI at `http://localhost:5000`; start with `python dashboard/run_dashboard.py`
 
 ## Key Technical Decisions
 
-- **Ollama REST API** at `http://192.168.1.13:11434/api/chat`, `stream: false`
-- **Tool-calling loop** (`chat_with_tools`) used by both research and QA agents for DuckDuckGo web search
+- **Ollama Python library** (`ollama.Client`) used for all LLM calls to `http://192.168.1.13:11434`; replaced raw `requests` calls in `ollama_client.py`
+- **Tool-calling loop** (`chat_with_tools`) used by research and QA agents; tools passed as **Python callables** — the library auto-generates JSON schemas from type annotations. Web tools (`web_search`, `web_fetch`) backed by Ollama's cloud API (`https://ollama.com/api/web_search` / `/api/web_fetch`); API key in `config.json → web_search.ollama_api_key`
 - **Claude Code worker:** `subprocess.run(["claude", "--print", "-p", prompt])` — every prompt is prefixed with `_PIPELINE_PREAMBLE` (defined at the top of `agent_claude_code.py`) which instructs the CLI to respond via stdout only, preventing it from attempting filesystem writes or requesting permissions in non-interactive mode.
 - **Task files** are `.task.md` with YAML frontmatter — see `ARCHITECTURE.md` for full schema
 - **System prompts** stored in `agents/<name>/system_prompt.md` — edit to change agent behaviour without touching code. The orchestrator has two: `system_prompt.md` (decomposition) and `validation_system_prompt.md` (validation decisions)
