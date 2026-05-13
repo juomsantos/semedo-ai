@@ -1,4 +1,7 @@
 {
+  "web_search": {
+    "ollama_api_key": "4bdec1afd22743ffa6aa1be921e51d40.GLvze_jHdOTeNhAL4O-h4jKl"
+  },
   "ollama": {
     "base_url": "http://192.168.1.13:11434",
     "timeout": 360

@@ -34,7 +34,7 @@ from shared.task_io import (
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
-from shared.web_search import web_search
+from shared.web_search import web_search, web_fetch
 from shared.token_logger import log_tokens
 from shared.logger import AgentLogger
 from shared.config import load_config
@@ -45,8 +45,12 @@ MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "qa" / "inbox"
 SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "qa" / "system_prompt.md"
 
-# Safety cap: maximum search calls per task
+# Safety cap: maximum tool calls per task
 MAX_TOOL_TURNS = 3
+
+# Native tools — the ollama library introspects these functions' type
+# annotations and docstrings to auto-generate the JSON schemas.
+QA_TOOLS = [web_search, web_fetch]
 
 LOCK_FILE = PROJECT_ROOT / "agents" / "qa" / "qa.lock"
 
@@ -86,29 +90,6 @@ def acquire_lock(log) -> bool:
 def release_lock():
     """Remove the lockfile. Registered with atexit so it runs on clean exit or exception."""
     LOCK_FILE.unlink(missing_ok=True)
-
-# Tool definition sent to the model on every request
-WEB_SEARCH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": (
-            "Search the web using DuckDuckGo. Use this to look up runtime errors, "
-            "library documentation, or code patterns when execution output alone is insufficient."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "A concise, specific search query.",
-                }
-            },
-            "required": ["query"],
-        },
-    },
-}
-
 
 def load_system_prompt() -> str:
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
@@ -219,7 +200,6 @@ Please review this code and determine if it correctly solves the task."""
         ]
 
         # Run tool-calling loop up to MAX_TOOL_TURNS iterations
-        tools = [WEB_SEARCH_TOOL]
         response = None
         empty_response_retries = 0
 
@@ -227,62 +207,62 @@ Please review this code and determine if it correctly solves the task."""
             result = client.chat_with_tools(
                 model=MODEL,
                 messages=messages,
-                tools=tools,
+                tools=QA_TOOLS,
             )
 
             if result["type"] == "text":
                 log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
                 response = result["content"]
-                log.info(f"QA review received ({len(response)} chars) after {turn} search turn(s)")
+                log.info(f"QA review received ({len(response)} chars) after {turn} tool turn(s)")
                 break
 
             if result["type"] == "tool_call":
                 tool_name = result["name"]
                 arguments = result["arguments"]
 
-                if tool_name != "web_search":
-                    # Unknown tool — tell the model and continue
+                if tool_name == "web_search":
+                    query = arguments.get("query", "").strip()
+                    if not query:
+                        log.warning(f"web_search called with empty query — skipping")
+                        tool_result = "ERROR: 'query' parameter was empty. Please provide a search query."
+                    else:
+                        log.info(f"web_search({turn + 1}/{MAX_TOOL_TURNS}): {query!r}")
+                        tool_result = web_search(query)
+                        log.info(f"web_search returned {len(tool_result)} chars")
+
+                elif tool_name == "web_fetch":
+                    url = arguments.get("url", "").strip()
+                    if not url:
+                        log.warning(f"web_fetch called with empty url — skipping")
+                        tool_result = "ERROR: 'url' parameter was empty. Please provide a URL."
+                    else:
+                        log.info(f"web_fetch({turn + 1}/{MAX_TOOL_TURNS}): {url!r}")
+                        tool_result = web_fetch(url)
+                        log.info(f"web_fetch returned {len(tool_result)} chars")
+
+                else:
                     log.warning(f"Model called unknown tool '{tool_name}' — skipping")
-                    messages.append({"role": "assistant", "content": "", "tool_calls": [
-                        {"function": {"name": tool_name, "arguments": arguments}}
-                    ]})
+                    tool_result = f"ERROR: Tool '{tool_name}' is not available."
+
+                if tool_result.startswith("ERROR:") and tool_name in ("web_search", "web_fetch"):
+                    log.error(f"Tool error — aborting loop: {tool_result}")
+                    raise OllamaError(f"Web tool unavailable: {tool_result}")
+
+                # Append assistant tool call and tool result to history.
+                # Use raw_message if available (preserves the library's native format).
+                raw_msg = result.get("raw_message")
+                if raw_msg is not None:
+                    messages.append(raw_msg)
+                else:
                     messages.append({
-                        "role": "tool",
-                        "content": f"ERROR: Tool '{tool_name}' is not available.",
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{"function": {"name": tool_name, "arguments": arguments}}],
                     })
-                    continue
-
-                query = arguments.get("query", "").strip()
-                if not query:
-                    log.warning(f"web_search called with empty query — skipping")
-                    messages.append({"role": "assistant", "content": "", "tool_calls": [
-                        {"function": {"name": "web_search", "arguments": arguments}}
-                    ]})
-                    messages.append({
-                        "role": "tool",
-                        "content": "ERROR: 'query' parameter was empty. Please provide a search query.",
-                    })
-                    continue
-
-                log.info(f"web_search({turn + 1}/{MAX_TOOL_TURNS}): {query!r}")
-                search_results = web_search(query)
-                log.info(f"Search returned {len(search_results)} chars")
-
-                if search_results.startswith("ERROR:"):
-                    log.error(f"Search tool error — aborting loop: {search_results}")
-                    raise OllamaError(f"Web search unavailable: {search_results}")
-
-                # Append assistant tool call and tool result to history
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {"function": {"name": "web_search", "arguments": arguments}}
-                    ],
-                })
                 messages.append({
                     "role": "tool",
-                    "content": search_results,
+                    "content": tool_result,
+                    "tool_name": tool_name,
                 })
 
         # If MAX_TOOL_TURNS reached without a text response, request final answer

@@ -44,6 +44,10 @@ class ProjectConfig:
         agent_config = self._config.get("agents", {}).get(agent_name, {})
         return agent_config.get("timeout", self.ollama_timeout())
 
+    def web_search_api_key(self) -> str:
+        """Get the Ollama API key for web search."""
+        return self._config.get("web_search", {}).get("ollama_api_key", "")
+
     def list_agents(self) -> list[str]:
         """Get list of all configured agents."""
         return list(self._config.get("agents", {}).keys())
