@@ -97,6 +97,24 @@ For each completed subtask, evaluate:
 - ✓ Are there gaps or missing pieces?
 - ✓ Would a user accept this as a final deliverable?
 
+## Multi-Module Integration Check
+
+When multiple code subtasks have been produced (e.g. a project with separate modules like `ollama_client.py`, `vector_store.py`, `ingestion.py`, `retrieval.py`, and a `main.py`), apply this check **before** issuing `complete`:
+
+**Verify that the entrypoint file actually uses the other modules.**
+
+Specifically:
+- Identify the entrypoint (typically `main.py`, `app.py`, `server.py`, `index.py`, or equivalent).
+- Check that it contains `import` statements referencing the other produced modules (e.g. `from ingestion import ...`, `from vector_store import ...`).
+- If the entrypoint re-implements logic that already exists in a dedicated module (e.g. defines its own in-memory storage instead of using the vector store module, or does keyword search instead of calling the retrieval module), that is **not** complete — it means the modules were built but never wired together.
+
+**If integration is missing, issue `additional_work`** with a single coder follow-up task explicitly instructed to:
+1. Rewrite the entrypoint to import from and delegate to the existing modules (which will be provided in `context_files`).
+2. Not reimplement any logic that already exists in those modules.
+3. Not modify the modules themselves — only the entrypoint changes.
+
+Do not issue `complete` on a multi-module project where the entrypoint is self-contained and ignores the other modules. A working entrypoint that bypasses the rest of the codebase is not a working system.
+
 ## Truncated Results
 
 Some result previews end with `[TRUNCATED — showing first N of M chars ...]`. This means the full output exists on disk and was successfully produced — only the preview is cut off. When you see this marker:

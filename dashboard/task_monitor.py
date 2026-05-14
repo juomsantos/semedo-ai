@@ -341,27 +341,51 @@ class TaskMonitor:
         """Parse a task file and extract metadata."""
         try:
             content = task_file.read_text(encoding="utf-8")
-            
-            # Split frontmatter from body
+
+            # Handle QA failure files (plain text, no YAML frontmatter)
+            if task_file.name.endswith("_qa_failure.md"):
+                task_id = task_file.stem.replace("_qa_failure", "")
+                file_mtime = datetime.fromtimestamp(task_file.stat().st_mtime, tz=timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - file_mtime).total_seconds()
+
+                return {
+                    "id": task_id,
+                    "type": "qa",
+                    "priority": "high",
+                    "created_by": "qa",
+                    "created_at": "",
+                    "assigned_to": assigned_to or "qa",
+                    "status": status,
+                    "location": location,
+                    "parent_task_id": None,
+                    "retry_count": 0,
+                    "iteration": None,
+                    "chain_to": None,
+                    "output_path": "",
+                    "age_seconds": int(age_seconds),
+                    "body_preview": content[:200],
+                }
+
+            # Handle standard task files with YAML frontmatter
             if not content.startswith("---"):
                 return None
-            
+
             parts = content.split("---", 2)
             if len(parts) < 3:
                 return None
-            
+
             frontmatter = parts[1].strip()
             body = parts[2].strip()
-            
+
             # Parse YAML frontmatter (simple parsing)
             metadata = self._parse_yaml_frontmatter(frontmatter)
-            
+
             task_id = metadata.get("id", task_file.stem)
-            
+
             # Calculate age
             file_mtime = datetime.fromtimestamp(task_file.stat().st_mtime, tz=timezone.utc)
             age_seconds = (datetime.now(timezone.utc) - file_mtime).total_seconds()
-            
+
             return {
                 "id": task_id,
                 "type": metadata.get("type", "unknown"),
