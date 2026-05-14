@@ -484,19 +484,7 @@ function buildTaskHierarchy(tasks) {
         }
     });
 
-    // Filter out orphans only if they appear as subtasks under a parent IN THIS LIST
-    // This prevents duplicates when viewing ALL STATUS (task appears under parent)
-    // but keeps orphans when viewing filtered status (parent not in results)
-    const subtaskIds = new Set();
-    roots.forEach(root => {
-        if (root.subtasks && root.subtasks.length > 0) {
-            root.subtasks.forEach(subtask => {
-                subtaskIds.add(subtask.id);
-            });
-        }
-    });
-
-    return roots.filter(root => !subtaskIds.has(root.id));
+    return roots;
 }
 
 // Render task hierarchy as HTML

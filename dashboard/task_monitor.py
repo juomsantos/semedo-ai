@@ -139,8 +139,6 @@ class TaskMonitor:
 
         # Failed tasks — include both orchestrator .task.md failures and
         # worker *_qa_failure.md reports. Deduplicate by task ID (prefer newer files).
-        # Skip failed tasks that already exist in the results (e.g., subtasks in validation/).
-        existing_ids = {t["id"] for t in tasks}
         if self.failed.exists():
             failed_files = sorted(
                 list(self.failed.glob("*.task.md")) + list(self.failed.glob("*_qa_failure.md")),
@@ -151,8 +149,7 @@ class TaskMonitor:
                 task = self._parse_task_file(task_file, "failed", "failed")
                 if task:
                     task_id = task["id"]
-                    # Only add if not already in results AND not already seen in failed
-                    if task_id not in existing_ids and task_id not in failed_tasks_dict:
+                    if task_id not in failed_tasks_dict:
                         failed_tasks_dict[task_id] = task
             tasks.extend(list(failed_tasks_dict.values())[:limit])
 
@@ -163,8 +160,18 @@ class TaskMonitor:
                 if task:
                     tasks.append(task)
 
-        # Sort by creation time descending
-        return sorted(tasks, key=lambda t: t.get("created_at", ""), reverse=True)[:limit]
+        # Sort by creation time descending, then deduplicate by task ID
+        # (same task can appear in multiple folders; keep first occurrence after sort)
+        sorted_tasks = sorted(tasks, key=lambda t: t.get("created_at", ""), reverse=True)
+        seen_ids = set()
+        deduped_tasks = []
+        for task in sorted_tasks:
+            task_id = task["id"]
+            if task_id not in seen_ids:
+                seen_ids.add(task_id)
+                deduped_tasks.append(task)
+
+        return deduped_tasks[:limit]
 
     def get_task_detail(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Get complete details for a specific task including result and logs."""
