@@ -160,8 +160,18 @@ class TaskMonitor:
                 if task:
                     tasks.append(task)
 
-        # Sort by creation time descending
-        return sorted(tasks, key=lambda t: t.get("created_at", ""), reverse=True)[:limit]
+        # Sort by creation time descending, then deduplicate by task ID
+        # (same task can appear in multiple folders; keep first occurrence after sort)
+        sorted_tasks = sorted(tasks, key=lambda t: t.get("created_at", ""), reverse=True)
+        seen_ids = set()
+        deduped_tasks = []
+        for task in sorted_tasks:
+            task_id = task["id"]
+            if task_id not in seen_ids:
+                seen_ids.add(task_id)
+                deduped_tasks.append(task)
+
+        return deduped_tasks[:limit]
 
     def get_task_detail(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Get complete details for a specific task including result and logs."""
