@@ -97,14 +97,14 @@ class TaskMonitor:
     def get_all_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get all tasks from all locations with status inferred from location."""
         tasks = []
-        
+
         # Pending tasks from inbox
         if self.inbox.exists():
             for task_file in sorted(self.inbox.glob("*.task.md"), reverse=True)[:limit]:
                 task = self._parse_task_file(task_file, "pending", "inbox")
                 if task:
                     tasks.append(task)
-        
+
         # Pending tasks from agent inboxes
         if self.agents_dir.exists():
             for agent_dir in sorted(self.agents_dir.iterdir()):
@@ -115,7 +115,7 @@ class TaskMonitor:
                         task = self._parse_task_file(task_file, "pending", f"agents/{assigned_to}/inbox", assigned_to=assigned_to)
                         if task:
                             tasks.append(task)
-        
+
         # Processing tasks
         if self.processing.exists():
             for task_file in sorted(self.processing.glob("*.task.md"), reverse=True)[:limit]:
@@ -136,26 +136,30 @@ class TaskMonitor:
                 task = self._parse_task_file(task_file, "completed", "outbox")
                 if task:
                     tasks.append(task)
-        
+
         # Failed tasks — include both orchestrator .task.md failures and
-        # worker *_qa_failure.md reports
+        # worker *_qa_failure.md reports. Deduplicate by task ID (prefer newer files).
         if self.failed.exists():
             failed_files = sorted(
                 list(self.failed.glob("*.task.md")) + list(self.failed.glob("*_qa_failure.md")),
                 key=lambda p: p.stat().st_mtime, reverse=True
-            )[:limit]
+            )
+            failed_tasks_dict = {}
             for task_file in failed_files:
                 task = self._parse_task_file(task_file, "failed", "failed")
                 if task:
-                    tasks.append(task)
-        
+                    task_id = task["id"]
+                    if task_id not in failed_tasks_dict:
+                        failed_tasks_dict[task_id] = task
+            tasks.extend(list(failed_tasks_dict.values())[:limit])
+
         # Pending approval tasks
         if self.claude_code_pending.exists():
             for task_file in sorted(self.claude_code_pending.glob("*.task.md"), reverse=True)[:limit]:
                 task = self._parse_task_file(task_file, "pending_approval", "agents/claude-code/pending", assigned_to="pending_approval")
                 if task:
                     tasks.append(task)
-        
+
         # Sort by creation time descending
         return sorted(tasks, key=lambda t: t.get("created_at", ""), reverse=True)[:limit]
 
@@ -681,6 +685,7 @@ class TaskMonitor:
         else:
             # For worker agents (coder, research, qa, claude-code): scan outbox for _result.md files
             # Worker task .task.md files go to validation/, not outbox/
+            # Separate results into completed/failed based on verdict field to avoid duplicates.
             if self.outbox.exists():
                 for result_file in sorted(self.outbox.glob("*_result.md"), reverse=True):
                     try:
@@ -702,14 +707,22 @@ class TaskMonitor:
                                 # Include this result if it matches the requested agent
                                 if result_agent == agent:
                                     output = result_content.split("---", 2)[-1].strip()[:2000] if len(parts) >= 3 else result_content[:2000]
-                                    completed_tasks.append({
+                                    verdict = metadata.get("verdict", "")
+
+                                    # Sort into completed or failed based on verdict
+                                    task_entry = {
                                         "id": task_id,
                                         "type": metadata.get("type", "unknown"),
                                         "created_at": metadata.get("created_at", ""),
                                         "priority": "medium",  # Not stored in result metadata
                                         "output": output,
                                         "body_preview": "",
-                                    })
+                                    }
+
+                                    if verdict == "FAIL":
+                                        failed_tasks.append(task_entry)
+                                    else:
+                                        completed_tasks.append(task_entry)
                     except Exception:
                         pass
 
@@ -743,33 +756,6 @@ class TaskMonitor:
                         "output": output,
                         "body_preview": task["body_preview"],
                     })
-
-        # For worker agents: also scan outbox/*_result.md for FAIL verdicts.
-        # QA (and future agents) write failure reports to output_path (outbox) with
-        # agent metadata, so they appear in both completed and failed sections.
-        if agent != "orchestrator" and self.outbox.exists():
-            for result_file in sorted(self.outbox.glob("*_result.md"), reverse=True):
-                try:
-                    result_content = result_file.read_text(encoding="utf-8")
-                    if not result_content.startswith("---"):
-                        continue
-                    parts = result_content.split("---", 2)
-                    if len(parts) < 2:
-                        continue
-                    metadata = self._parse_yaml_frontmatter(parts[1].strip())
-                    if metadata.get("agent") == agent and metadata.get("verdict") == "FAIL":
-                        task_id = result_file.stem.replace("_result", "")
-                        output = parts[2].strip()[:2000] if len(parts) >= 3 else result_content[:2000]
-                        failed_tasks.append({
-                            "id": task_id,
-                            "type": "qa",
-                            "created_at": metadata.get("created_at", ""),
-                            "priority": "medium",
-                            "output": output,
-                            "body_preview": "",
-                        })
-                except Exception:
-                    pass
 
         return {
             "agent": agent,
