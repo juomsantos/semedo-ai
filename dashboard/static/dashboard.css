@@ -1041,7 +1041,8 @@ body {
     margin-right: 4px;
     transition: color 0.2s ease, transform 0.2s ease;
     display: inline-block;
-    min-width: 16px;
+    min-width: 20px;
+    min-height:20px;
     text-align: center;
 }
 

@@ -2,7 +2,7 @@
  * dashboard.js — Real-time dashboard logic with 1.5 second polling
  */
 
-const POLL_INTERVAL = 1500; // 1.5 seconds
+const POLL_INTERVAL = 2000; // 1.5 seconds
 
 let pollTimer = null;
 let lastUpdate = new Date();
@@ -88,7 +88,7 @@ function handleTaskListClick(e) {
 
 // Start real-time polling
 function startPolling() {
-    console.log('Starting dashboard polling (1.5s interval)');
+    console.log('Starting dashboard polling (' + POLL_INTERVAL + 'ms interval)');
     
     // Initial update
     updateDashboard();
@@ -303,7 +303,7 @@ async function updateHistoryTasks() {
             return;
         }
 
-        container.innerHTML = renderTaskHierarchy(data.tasks);
+        container.innerHTML = renderTaskHierarchy(data.tasks, filter);
     } catch (error) {
         console.error('Error updating history:', error);
     }
@@ -466,17 +466,18 @@ function showNotification(message, type) {
 }
 
 // Build task hierarchy from flat list
-function buildTaskHierarchy(tasks) {
+function buildTaskHierarchy(tasks, filter) {
     const taskMap = {};
     const roots = [];
 
+    let filteredTasks = (filter === 'failed') ? tasks : tasks.filter(fl => !(fl.location && fl.location === 'failed'))
     // Index all tasks by ID
-    tasks.forEach(task => {
+    filteredTasks.forEach(task => {
         taskMap[task.id] = { ...task, subtasks: [] };
     });
 
     // Organize into parent-child relationships
-    tasks.forEach(task => {
+    filteredTasks.forEach(task => {
         if (task.parent_task_id && taskMap[task.parent_task_id]) {
             taskMap[task.parent_task_id].subtasks.push(taskMap[task.id]);
         } else {
@@ -488,8 +489,8 @@ function buildTaskHierarchy(tasks) {
 }
 
 // Render task hierarchy as HTML
-function renderTaskHierarchy(tasks) {
-    const roots = buildTaskHierarchy(tasks);
+function renderTaskHierarchy(tasks, filter) {
+    const roots = buildTaskHierarchy(tasks, filter);
     return roots.map(task => renderTaskWithChildren(task)).join('');
 }
 
