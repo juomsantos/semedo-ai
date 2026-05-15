@@ -1100,3 +1100,132 @@ body {
 .task-subtasks[style*="display: none"] {
     display: none !important;
 }
+
+/* Context Files Picker */
+.label-hint {
+    font-weight: 400;
+    color: #888;
+    font-size: 12px;
+    margin-left: 4px;
+}
+.context-picker {
+    position: relative;
+}
+.context-search-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    background: white;
+    color: #333;
+    transition: border-color 0.2s ease;
+}
+.context-search-input:focus {
+    outline: none;
+    border-color: #0066cc;
+    box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+}
+.context-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    z-index: 200;
+    max-height: 260px;
+    overflow-y: auto;
+}
+.context-dropdown-list {
+    padding: 4px 0;
+}
+.context-no-results {
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #888;
+}
+.context-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s ease;
+    border-bottom: 1px solid #f0f0f0;
+}
+.context-dropdown-item:last-child {
+    border-bottom: none;
+}
+.context-dropdown-item:hover {
+    background: #f0f6ff;
+}
+.context-dropdown-item.already-selected {
+    opacity: 0.4;
+    cursor: default;
+}
+.context-item-type {
+    background: #e0e7ff;
+    color: #3b4fd8;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.context-item-preview {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #333;
+}
+.context-item-date {
+    font-size: 11px;
+    color: #aaa;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+/* Selected context file chips */
+.context-selected {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+.context-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #e8f4ff;
+    border: 1px solid #4facfe;
+    border-radius: 20px;
+    padding: 4px 10px 4px 12px;
+    font-size: 12px;
+    color: #0066cc;
+    max-width: 280px;
+}
+.chip-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chip-remove {
+    background: none;
+    border: none;
+    color: #0066cc;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+}
+.chip-remove:hover {
+    opacity: 1;
+}

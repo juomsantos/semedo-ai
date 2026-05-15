@@ -5,6 +5,7 @@ Endpoints:
   GET /api/status          - System status and metrics
   GET /api/tasks           - All tasks with pagination/filtering
   GET /api/tasks/<id>      - Task detail with logs and result
+  GET /api/tasks/completed - Completed parent tasks for context file selection
   GET /api/agents          - Per-agent statistics
   GET /api/agents/<name>/logs  - Agent logs
   POST /api/clear-cache    - Clear all cached data (task files, logs, tokens)
@@ -168,6 +169,16 @@ def get_results(agent):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/tasks/completed", methods=["GET"])
+def get_completed_tasks():
+    """Return completed parent tasks available as context files."""
+    try:
+        tasks = monitor.get_completed_parent_tasks(limit=100)
+        return jsonify(tasks), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/tasks/submit", methods=["POST"])
 def submit_task():
     """Submit a new task to the orchestrator."""
@@ -193,6 +204,13 @@ def submit_task():
         if not expected_output:
             expected_output = "See task description."
 
+        # Extract and validate context_files
+        context_files = body.get("context_files", [])
+        if not isinstance(context_files, list):
+            context_files = []
+        # Strip whitespace and filter empty strings
+        context_files = [cf.strip() for cf in context_files if isinstance(cf, str) and cf.strip()]
+
         # Create task file
         inbox_path = PROJECT_ROOT / "inbox"
         task_path = create_task_file(
@@ -203,6 +221,7 @@ def submit_task():
             priority=priority,
             created_by="dashboard",
             assigned_to="orchestrator",
+            context_files=context_files,
         )
 
         # Extract task ID from path (filename format: {task_id}.task.md)
@@ -286,6 +305,7 @@ def main(port: int = 5000, debug: bool = False):
     print(f"  GET /api/status          - System metrics")
     print(f"  GET /api/tasks           - All tasks")
     print(f"  GET /api/tasks/<id>      - Task detail")
+    print(f"  GET /api/tasks/completed - Completed tasks for context")
     print(f"  GET /api/agents          - Agent statistics")
     print(f"  GET /api/agents/<name>/logs - Agent logs")
     print(f"  GET /api/pending-approvals - Tasks awaiting approval")

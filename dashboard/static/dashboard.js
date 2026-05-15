@@ -6,6 +6,8 @@ const POLL_INTERVAL = 2000; // 1.5 seconds
 
 let pollTimer = null;
 let lastUpdate = new Date();
+let completedTasksCache = [];        // populated on first focus of context search
+let selectedContextFiles = [];       // array of {task_id, output_path, description_preview}
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -54,6 +56,29 @@ function setupEventListeners() {
 
     // Task list event delegation
     setupTaskListDelegation();
+
+    // Context files picker
+    const contextSearch = document.getElementById('context-search');
+    if (contextSearch) {
+        contextSearch.addEventListener('focus', async () => {
+            await loadCompletedTasks();
+            renderContextDropdown(contextSearch.value);
+        });
+        contextSearch.addEventListener('input', () => {
+            renderContextDropdown(contextSearch.value);
+        });
+        contextSearch.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.getElementById('context-dropdown').style.display = 'none';
+            }
+        });
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-picker')) {
+                document.getElementById('context-dropdown').style.display = 'none';
+            }
+        });
+    }
 }
 
 // Setup event delegation for task lists (handles both active and history tabs)
@@ -372,6 +397,92 @@ async function updateLogs(agent) {
     }
 }
 
+// Load completed tasks for context picker (lazy load)
+async function loadCompletedTasks() {
+    if (completedTasksCache.length > 0) return; // already loaded
+    try {
+        const resp = await fetch('/api/tasks/completed');
+        if (resp.ok) {
+            completedTasksCache = await resp.json();
+        }
+    } catch (e) {
+        console.warn('Could not load completed tasks:', e);
+    }
+}
+
+// Render context dropdown with filtered results
+function renderContextDropdown(query) {
+    const list = document.getElementById('context-dropdown-list');
+    const dropdown = document.getElementById('context-dropdown');
+    const q = query.trim().toLowerCase();
+    const matches = q
+        ? completedTasksCache.filter(t =>
+            t.description_preview.toLowerCase().includes(q) ||
+            t.task_id.toLowerCase().includes(q)
+          )
+        : completedTasksCache.slice(0, 20); // show 20 most recent when no query
+    if (matches.length === 0) {
+        list.innerHTML = '<p class="context-no-results">No matching completed tasks</p>';
+    } else {
+        list.innerHTML = matches.map(t => {
+            const alreadySelected = selectedContextFiles.some(s => s.task_id === t.task_id);
+            return `<div
+                class="context-dropdown-item${alreadySelected ? ' already-selected' : ''}"
+                data-task-id="${t.task_id}"
+                data-output-path="${t.output_path}"
+                data-preview="${t.description_preview.replace(/"/g, '&quot;')}"
+                title="${t.description_preview}"
+            >
+                <span class="context-item-type">${t.type}</span>
+                <span class="context-item-preview">${t.description_preview || t.task_id}</span>
+                <span class="context-item-date">${t.created_at ? t.created_at.slice(0, 10) : ''}</span>
+            </div>`;
+        }).join('');
+        // Click handler for each item
+        list.querySelectorAll('.context-dropdown-item:not(.already-selected)').forEach(item => {
+            item.addEventListener('click', () => {
+                addContextFile(item.dataset.taskId, item.dataset.outputPath, item.dataset.preview);
+                document.getElementById('context-search').value = '';
+                document.getElementById('context-dropdown').style.display = 'none';
+            });
+        });
+    }
+    dropdown.style.display = 'block';
+}
+
+// Add a context file to the selection
+function addContextFile(taskId, outputPath, preview) {
+    if (selectedContextFiles.some(s => s.task_id === taskId)) return; // deduplicate
+    selectedContextFiles.push({ task_id: taskId, output_path: outputPath, description_preview: preview });
+    renderContextChips();
+}
+
+// Remove a context file from the selection
+function removeContextFile(taskId) {
+    selectedContextFiles = selectedContextFiles.filter(s => s.task_id !== taskId);
+    renderContextChips();
+}
+
+// Render selected files as removable chips
+function renderContextChips() {
+    const container = document.getElementById('context-selected');
+    if (selectedContextFiles.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+    container.style.display = 'flex';
+    container.innerHTML = selectedContextFiles.map(s => `
+        <div class="context-chip" title="${s.output_path}">
+            <span class="chip-label">${s.description_preview ? s.description_preview.slice(0, 50) : s.task_id}</span>
+            <button class="chip-remove" data-task-id="${s.task_id}" aria-label="Remove">&times;</button>
+        </div>
+    `).join('');
+    container.querySelectorAll('.chip-remove').forEach(btn => {
+        btn.addEventListener('click', () => removeContextFile(btn.dataset.taskId));
+    });
+}
+
 // Submit task form
 async function submitTask(event) {
     event.preventDefault();
@@ -407,6 +518,7 @@ async function submitTask(event) {
                 type: type,
                 priority: priority,
                 expected_output: expectedOutput,
+                context_files: selectedContextFiles.map(s => s.output_path),
             }),
         });
 
@@ -416,6 +528,10 @@ async function submitTask(event) {
             showSubmitStatus(`Task submitted: ${data.task_id}`, 'success');
             document.getElementById('task-description').value = '';
             document.getElementById('task-expected-output').value = '';
+            // Reset context files picker
+            selectedContextFiles = [];
+            renderContextChips();
+            completedTasksCache = []; // force a fresh fetch next time
             // Keep type and priority for quick resubmit
         } else {
             showSubmitStatus(data.error || 'Failed to submit task', 'error');

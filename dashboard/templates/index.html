@@ -183,6 +183,27 @@
                     ></textarea>
                 </div>
 
+                <div class="form-group">
+                    <label for="context-search">Context Files <span class="label-hint">(optional — attach prior results)</span></label>
+                    <div class="context-picker">
+                        <input
+                            type="text"
+                            id="context-search"
+                            class="form-input context-search-input"
+                            placeholder="Search completed tasks by description..."
+                            autocomplete="off"
+                        />
+                        <div id="context-dropdown" class="context-dropdown" style="display:none;">
+                            <div id="context-dropdown-list" class="context-dropdown-list">
+                                <p class="context-no-results">Type to search completed tasks</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="context-selected" class="context-selected" style="display:none;">
+                        <!-- Chips injected here by JS -->
+                    </div>
+                </div>
+
                 <div class="form-actions">
                     <button type="submit" id="submit-btn" class="btn btn-submit">Submit Task</button>
                 </div>

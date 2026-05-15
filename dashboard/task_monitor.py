@@ -647,6 +647,49 @@ class TaskMonitor:
         except Exception:
             return []
 
+    def get_completed_parent_tasks(self, limit: int = 100) -> list:
+        """Return completed parent tasks that have a result file, newest first.
+        Each entry is a dict with:
+            task_id        - the task ID string
+            type           - task type (code / research / etc.)
+            created_at     - ISO timestamp string
+            description_preview - first 120 chars of the task body
+            output_path    - Windows path to the _result.md file (from frontmatter)
+        Only parent tasks are included (no parent_task_id in frontmatter).
+        Only tasks whose output_path points to an existing _result.md are included.
+        """
+        results = []
+        if not self.outbox.exists():
+            return results
+        task_files = sorted(self.outbox.glob("*.task.md"), reverse=True)
+        for task_file in task_files:
+            if len(results) >= limit:
+                break
+            try:
+                task = self._parse_task_file(task_file, "completed", "outbox")
+                if task is None:
+                    continue
+                # Skip subtasks
+                if task.get("parent_task_id"):
+                    continue
+                output_path = task.get("output_path", "")
+                if not output_path:
+                    continue
+                # Verify the result file actually exists
+                result_file = Path(output_path)
+                if not result_file.exists():
+                    continue
+                results.append({
+                    "task_id": task["id"],
+                    "type": task.get("type", "unknown"),
+                    "created_at": task.get("created_at", ""),
+                    "description_preview": task.get("body_preview", "")[:120],
+                    "output_path": output_path,
+                })
+            except Exception:
+                continue
+        return results
+
     def get_results_by_agent(self, agent: str = "orchestrator") -> Dict[str, Any]:
         """
         Get completed and failed task results grouped by agent.
