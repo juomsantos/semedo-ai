@@ -52,6 +52,7 @@
             <button class="tab-btn" data-tab="agents">Agent Stats</button>
             <button class="tab-btn" data-tab="logs">Logs</button>
             <button class="tab-btn" data-tab="submit">Submit Task</button>
+            <button class="tab-btn" data-tab="chat">💬 Chat</button>
             <button class="tab-btn" data-tab="knowledge">Knowledge Base</button>
         </nav>
 
@@ -229,6 +230,26 @@
                 </div>
             </form>
         </section>
+        <!-- Chat Tab -->
+        <section id="tab-chat" class="tab-content">
+            <div class="section-header">
+                <h3>Chat with LLM</h3>
+                <button class="btn-clear-chat" onclick="clearChatHistory()">Clear history</button>
+            </div>
+            <div id="chat-messages" class="chat-messages"></div>
+            <div class="chat-input-area">
+                <textarea
+                    id="chat-input"
+                    class="chat-input"
+                    placeholder="Ask about tasks, pipeline status, research questions, or create new tasks... (Ctrl+Enter to send)"
+                    rows="3"
+                ></textarea>
+                <div class="chat-actions">
+                    <button id="chat-send-btn" class="btn btn-submit" onclick="sendChatMessage()">Send</button>
+                </div>
+            </div>
+        </section>
+
         <!-- Knowledge Base Tab -->
         <section id="tab-knowledge" class="tab-content">
             <div class="section-header">

@@ -25,6 +25,17 @@ function setupEventListeners() {
         });
     });
 
+    // Chat input - Ctrl+Enter to send
+    const chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                e.preventDefault();
+                sendChatMessage();
+            }
+        });
+    }
+
     // History filter
     document.getElementById('history-filter').addEventListener('change', updateHistoryTasks);
 
@@ -1254,4 +1265,102 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ============================================================================
+// Chat Functions
+// ============================================================================
+
+let chatSessionId = null;
+
+function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const message = input.value.trim();
+
+    if (!message) return;
+
+    // Disable input while sending
+    input.disabled = true;
+    document.getElementById('chat-send-btn').disabled = true;
+
+    // Append user bubble
+    appendChatBubble('user', message);
+    input.value = '';
+
+    // Call API
+    fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, session_id: chatSessionId }),
+    })
+    .then(resp => {
+        if (!resp.ok) {
+            return resp.json().then(data => {
+                throw new Error(data.error || 'Chat failed');
+            });
+        }
+        return resp.json();
+    })
+    .then(data => {
+        chatSessionId = data.session_id;
+        appendChatBubble('assistant', data.reply);
+
+        // Show task created badge if applicable
+        if (data.action && data.action.type === 'task_created') {
+            appendTaskBadge(data.action.task_id);
+        }
+    })
+    .catch(err => {
+        appendChatBubble('error', `Error: ${err.message}`);
+    })
+    .finally(() => {
+        input.disabled = false;
+        document.getElementById('chat-send-btn').disabled = false;
+        input.focus();
+    });
+}
+
+function appendChatBubble(role, content) {
+    const container = document.getElementById('chat-messages');
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble chat-bubble-${role}`;
+
+    const text = document.createElement('div');
+    text.className = 'chat-bubble-text';
+    text.textContent = content;
+
+    bubble.appendChild(text);
+    container.appendChild(bubble);
+
+    // Scroll to bottom
+    container.scrollTop = container.scrollHeight;
+}
+
+function appendTaskBadge(taskId) {
+    const container = document.getElementById('chat-messages');
+    const badge = document.createElement('div');
+    badge.className = 'chat-task-badge';
+    badge.textContent = `✓ Task created: ${taskId}`;
+    container.appendChild(badge);
+    container.scrollTop = container.scrollHeight;
+}
+
+function clearChatHistory() {
+    if (!chatSessionId) return;
+
+    if (!confirm('Clear chat history?')) return;
+
+    fetch('/api/chat/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: chatSessionId }),
+    })
+    .then(() => {
+        document.getElementById('chat-messages').innerHTML = '';
+        chatSessionId = null;
+        showNotification('Chat history cleared', 'success');
+    })
+    .catch(err => {
+        showNotification(`Error: ${err.message}`, 'error');
+    });
 }

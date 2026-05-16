@@ -15,7 +15,9 @@ Endpoints:
 import sys
 import shutil
 import requests as _requests
+import re
 from pathlib import Path
+from datetime import datetime, timezone
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
@@ -25,6 +27,10 @@ dashboard_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(dashboard_dir))
 
 from task_monitor import TaskMonitor
+from chat_session import ChatSessionStore
+from chat_context import build_base_snapshot, get_deep_task_context, extract_task_id
+from agent_chat import call_chat_with_tools
+from shared.ollama_client import OllamaError
 
 # Determine project root (parent of dashboard)
 PROJECT_ROOT = dashboard_dir.parent
@@ -40,6 +46,27 @@ CORS(app)
 
 # Initialize task monitor
 monitor = TaskMonitor(PROJECT_ROOT)
+
+# Initialize chat components
+chat_session_store = ChatSessionStore(max_history_turns=20)
+
+# Load chat system prompt template
+chat_system_prompt_path = dashboard_dir / "chat_system_prompt.md"
+CHAT_SYSTEM_PROMPT_TEMPLATE = ""
+if chat_system_prompt_path.exists():
+    CHAT_SYSTEM_PROMPT_TEMPLATE = chat_system_prompt_path.read_text(encoding='utf-8')
+
+# Load config for chat settings
+try:
+    config = _load_config()
+    chat_config = config._config.get("chat", {})
+    CHAT_MODEL = chat_config.get("model", config.agent_model("orchestrator") or "qwen3.5:9b")
+    CHAT_TIMEOUT = chat_config.get("timeout", 120)
+    CHAT_MAX_TOOL_TURNS = chat_config.get("max_tool_turns", 8)
+except Exception:
+    CHAT_MODEL = "qwen3.5:9b"
+    CHAT_TIMEOUT = 120
+    CHAT_MAX_TOOL_TURNS = 8
 
 
 @app.route("/")
@@ -386,6 +413,117 @@ def rag_status():
         return jsonify(resp.json()), resp.status_code
     except _requests.exceptions.ConnectionError:
         return jsonify({"status": "unavailable"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Chat API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    """Chat endpoint with LLM and tools."""
+    try:
+        body = request.get_json() or {}
+        user_message = body.get("message", "").strip()
+        session_id = body.get("session_id")
+
+        if not user_message:
+            return jsonify({"error": "message is required"}), 400
+
+        # Create or retrieve session
+        if not session_id:
+            session_id = chat_session_store.new_session()
+
+        history = chat_session_store.get_history(session_id)
+
+        # Build system prompt
+        base_snapshot = build_base_snapshot(PROJECT_ROOT)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        system_prompt = CHAT_SYSTEM_PROMPT_TEMPLATE.replace("{PIPELINE_SNAPSHOT}", base_snapshot).replace("{TODAY}", today)
+
+        # Check if message mentions a task ID and inject deep context
+        task_id = extract_task_id(user_message)
+        if task_id:
+            deep_context = get_deep_task_context(task_id, PROJECT_ROOT)
+            system_prompt = system_prompt.replace("{PIPELINE_SNAPSHOT}", f"{base_snapshot}{deep_context}")
+
+        # Call LLM with tools
+        try:
+            reply = call_chat_with_tools(
+                model=CHAT_MODEL,
+                system_prompt=system_prompt,
+                history=history,
+                user_message=user_message,
+                max_tool_turns=CHAT_MAX_TOOL_TURNS,
+            )
+        except OllamaError as e:
+            return jsonify({"error": f"LLM error: {str(e)}"}), 503
+
+        # Parse CREATE_TASK block if present
+        action = None
+        task_match = re.search(r'<CREATE_TASK>\s*(\{[^}]+\})\s*</CREATE_TASK>', reply, re.DOTALL)
+        if task_match:
+            import json
+            try:
+                task_data = json.loads(task_match.group(1))
+                # Create task
+                task_type = task_data.get("type", "code").strip()
+                priority = task_data.get("priority", "medium").strip()
+                description = task_data.get("description", "").strip()
+                expected_output = task_data.get("expected_output", "See task description.").strip()
+
+                if description:
+                    inbox_path = PROJECT_ROOT / "inbox"
+                    task_path = create_task_file(
+                        inbox_path=inbox_path,
+                        task_type=task_type,
+                        description=description,
+                        expected_output=expected_output,
+                        priority=priority,
+                        created_by="chat",
+                        assigned_to="orchestrator",
+                        context_files=[],
+                    )
+                    new_task_id = task_path.stem.replace(".task", "")
+                    action = {"type": "task_created", "task_id": new_task_id}
+
+                # Strip the CREATE_TASK block from reply
+                reply = re.sub(r'<CREATE_TASK>.*?</CREATE_TASK>', '', reply, flags=re.DOTALL).strip()
+            except (json.JSONDecodeError, Exception):
+                pass
+
+        # Append to history
+        chat_session_store.append(session_id, "user", user_message)
+        chat_session_store.append(session_id, "assistant", reply)
+
+        result = {
+            "reply": reply,
+            "session_id": session_id,
+        }
+        if action:
+            result["action"] = action
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/chat/clear", methods=["POST"])
+def clear_chat():
+    """Clear chat history for a session."""
+    try:
+        body = request.get_json() or {}
+        session_id = body.get("session_id")
+
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+
+        chat_session_store.clear(session_id)
+        return jsonify({"status": "cleared"}), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

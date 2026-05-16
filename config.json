@@ -39,5 +39,11 @@
   },
   "rag_api": {
     "url": "http://localhost:8000"
+  },
+  "chat": {
+    "model": "qwen3.5:9b",
+    "timeout": 120,
+    "max_history_turns": 20,
+    "max_tool_turns": 8
   }
 }
