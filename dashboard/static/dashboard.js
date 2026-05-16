@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     startPolling();
     updateLogs('orchestrator');
+    // Keep "X ago" display fresh between poll cycles
+    setInterval(updateLastUpdateTime, 1000);
 });
 
 // Setup event listeners
@@ -222,28 +224,28 @@ async function updateApprovals() {
 // Create approval task element HTML
 function createApprovalTaskElement(task) {
     const ageStr = formatAge(task.age_seconds);
-    
+    const priClass = task.priority === 'high' ? 'pri-high' : task.priority === 'medium' ? 'pri-medium' : '';
+    const bodyPreview = task.body ? task.body.slice(0, 160) : '';
+
     return `
-        <div class="task-item approval" data-task-id="${task.id}">
-            <div class="task-header">
+        <div class="task-item t-approval" data-task-id="${task.id}">
+            <div class="task-row">
+                <span class="expand-placeholder"></span>
                 <span class="task-id">${task.id}</span>
-                <span class="task-status approval">${task.status}</span>
+                <span class="tag">${task.type}</span>
+                <span class="tag ${priClass}">${task.priority}</span>
+                <span class="spacer"></span>
+                <span class="task-status approval">approval</span>
+                <span class="time-ago">${ageStr}</span>
             </div>
-            <div class="task-meta">
-                <span class="task-type">${task.type}</span>
-                <span class="task-priority priority-${task.priority}">${task.priority}</span>
-                <span class="task-age">${ageStr}</span>
+            ${bodyPreview ? `<div class="task-desc">${escapeHtml(bodyPreview)}</div>` : ''}
+            <div class="task-meta-row">
+                <span class="agent-tag">→ ${task.assigned_to}</span>
+                <span class="subtask-prog">${task.created_by}</span>
             </div>
-            <div class="task-info">
-                <span class="task-creator">${task.created_by}</span>
-                <span class="task-assigned">→ ${task.assigned_to}</span>
-            </div>
-            <div class="task-actions">
-                <button class="btn btn-small btn-success" onclick="approveTask('${task.id}')">Approve</button>
-                <button class="btn btn-small btn-danger" onclick="rejectTask('${task.id}')">Reject</button>
-            </div>
-            <div class="task-body">
-                <pre>${escapeHtml(task.body)}</pre>
+            <div class="approval-actions">
+                <button class="btn-approve" onclick="event.stopPropagation();approveTask('${task.id}')">✓ Approve</button>
+                <button class="btn-reject" onclick="event.stopPropagation();rejectTask('${task.id}')">✕ Reject</button>
             </div>
         </div>
     `;
@@ -345,6 +347,16 @@ async function updateHistoryTasks() {
     }
 }
 
+// Agent icons map
+const AGENT_ICONS = {
+    orchestrator: '⬡',
+    coder:        '⌨',
+    research:     '🔍',
+    qa:           '✓',
+    'claude-code':'◆',
+    scheduler:    '⏱',
+};
+
 // Update agent statistics
 async function updateAgentStats() {
     try {
@@ -353,25 +365,34 @@ async function updateAgentStats() {
 
         const tbody = document.getElementById('agent-stats-body');
         const rows = Object.entries(stats).map(([agent, data]) => {
-            const promptTokens = data.prompt_tokens || 0;
+            const promptTokens     = data.prompt_tokens     || 0;
             const completionTokens = data.completion_tokens || 0;
-            const llmCalls = data.llm_calls || 0;
+            const llmCalls         = data.llm_calls         || 0;
+            const completed        = data.completed         || 0;
+            const errors           = data.errors            || 0;
 
             // Show "—" for claude-code if all token values are 0
             const showDash = agent === 'claude-code' && promptTokens === 0 && completionTokens === 0 && llmCalls === 0;
 
-            const promptDisplay = showDash ? '—' : promptTokens.toLocaleString();
+            const promptDisplay     = showDash ? '—' : promptTokens.toLocaleString();
             const completionDisplay = showDash ? '—' : completionTokens.toLocaleString();
-            const callsDisplay = showDash ? '—' : llmCalls.toLocaleString();
+            const callsDisplay      = showDash ? '—' : llmCalls.toLocaleString();
+
+            const icon = AGENT_ICONS[agent] || '·';
 
             return `
                 <tr>
-                    <td><strong>${agent}</strong></td>
-                    <td>${data.completed}</td>
-                    <td class="error">${data.errors}</td>
-                    <td>${promptDisplay}</td>
-                    <td>${completionDisplay}</td>
-                    <td>${callsDisplay}</td>
+                    <td>
+                        <div class="agent-cell">
+                            <div class="agent-icon">${icon}</div>
+                            <strong>${agent}</strong>
+                        </div>
+                    </td>
+                    <td class="mono-cell ${completed > 0 ? 'good' : 'zero'}">${completed}</td>
+                    <td class="mono-cell ${errors > 0 ? 'error' : 'zero'}">${errors}</td>
+                    <td class="mono-cell ${promptTokens === 0 ? 'zero' : ''}">${promptDisplay}</td>
+                    <td class="mono-cell ${completionTokens === 0 ? 'zero' : ''}">${completionDisplay}</td>
+                    <td class="mono-cell ${llmCalls === 0 ? 'zero' : ''}">${callsDisplay}</td>
                 </tr>
             `;
         }).join('');
@@ -380,6 +401,27 @@ async function updateAgentStats() {
     } catch (error) {
         console.error('Error updating agent stats:', error);
     }
+}
+
+// Parse a raw log line into structured parts (timestamp, level, agent, message)
+// Expected format: "2026-05-16 10:23:45,123 INFO [orchestrator] message"
+const LOG_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]?\d*)\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+\[([^\]]+)\]\s+([\s\S]*)$/;
+
+function renderLogLine(raw) {
+    const m = raw.match(LOG_RE);
+    if (!m) {
+        // Fall back to plain mono entry
+        return `<div class="log-entry">${escapeHtml(raw)}</div>`;
+    }
+    const [, ts, lvl, agent, msg] = m;
+    const lvlNorm = lvl === 'WARNING' ? 'WARN' : lvl === 'CRITICAL' ? 'ERROR' : lvl;
+    const lvlClass = lvlNorm === 'INFO' ? 'log-info' : lvlNorm === 'WARN' ? 'log-warn' : lvlNorm === 'ERROR' ? 'log-error' : 'log-debug';
+    return `<div class="log-line">
+        <span class="log-ts">${escapeHtml(ts)}</span>
+        <span class="${lvlClass}">${lvlNorm}</span>
+        <span class="log-lagent">${escapeHtml(agent)}</span>
+        <span class="log-msg">${escapeHtml(msg)}</span>
+    </div>`;
 }
 
 // Update logs for a specific agent
@@ -395,9 +437,7 @@ async function updateLogs(agent) {
             return;
         }
 
-        container.innerHTML = [...data.logs].reverse().map(log => `
-            <div class="log-entry">${escapeHtml(log)}</div>
-        `).join('');
+        container.innerHTML = [...data.logs].reverse().map(renderLogLine).join('');
 
         // Latest entries are now at the top — scroll to top
         container.parentElement.scrollTop = 0;
@@ -672,40 +712,50 @@ function renderTaskHierarchy(tasks, filter) {
 function renderTaskWithChildren(task, depth = 0) {
     const isParent = task.subtasks && task.subtasks.length > 0;
     const isExpanded = isParent && isTaskExpanded(task.id);
-    const indent = depth > 0 ? `style="margin-left: ${depth * 32}px;"` : '';
+    const isSubtask = !!task.parent_task_id;
     const subtasksDisplay = isParent && !isExpanded ? 'style="display: none;"' : '';
+    const statusClass = task.status.toLowerCase();
+
+    // Priority accent class
+    const priClass = task.priority === 'high' ? 'pri-high' : task.priority === 'medium' ? 'pri-medium' : '';
+
+    // Subtask counts for parent
+    const total     = isParent ? task.subtasks.length : 0;
+    const doneCount = isParent ? task.subtasks.filter(s => s.status === 'completed').length : 0;
+
+    const classes = `task-item t-${statusClass}${isSubtask ? ' subtask' : ''}`;
 
     let html = `
-        <div class="task-item ${task.status.toLowerCase()}" data-task-id="${task.id}" ${indent}>
-            <div class="task-header">
-                ${isParent ? `<button class="expand-toggle ${isExpanded ? 'expanded' : ''}">▶</button>` : '<span class="expand-toggle-placeholder"></span>'}
+        <div class="${classes}" data-task-id="${task.id}">
+            <div class="task-row">
+                ${isParent
+                    ? `<button class="expand-toggle ${isExpanded ? 'expanded' : ''}">▶</button>`
+                    : '<span class="expand-placeholder"></span>'}
                 <span class="task-id">${task.id}</span>
-                <span class="task-status ${task.status.toLowerCase()}">${task.status}</span>
-                <span class="task-label-badge">${isParent ? 'Parent' : task.parent_task_id ? 'Subtask' : ''}</span>
-            </div>
-            <div class="task-meta">
-                <span class="task-type">${task.type}</span>
-                <span class="task-priority priority-${task.priority}">${task.priority}</span>
-                <span class="task-age">${formatAge(task.age_seconds)}</span>
-                ${task.iteration ? `<span class="task-iteration">Iteration ${task.iteration}</span>` : ''}
-            </div>
-            <div class="task-info">
-                <span class="task-creator">${task.created_by}</span>
-                <span class="task-assigned">→ ${task.assigned_to}</span>
-                ${task.retry_count > 0 ? `<span class="task-retry">Retry ${task.retry_count}</span>` : ''}
+                <span class="tag">${task.type}</span>
+                <span class="tag ${priClass}">${task.priority}</span>
+                <span class="spacer"></span>
+                <span class="task-status ${statusClass}">${task.status}</span>
+                <span class="time-ago">${formatAge(task.age_seconds)}</span>
             </div>`;
 
-    // Add background color for subtasks
-    if (task.parent_task_id) {
-        html = html.replace('class="task-item', 'class="task-item subtask');
+    // Body preview line
+    if (task.body_preview) {
+        html += `<div class="task-desc">${escapeHtml(task.body_preview.slice(0, 140))}</div>`;
     }
 
-    html += `</div>`;
+    html += `
+            <div class="task-meta-row">
+                <span class="agent-tag">→ ${task.assigned_to}</span>
+                ${isParent ? `<span class="subtask-prog">${doneCount}/${total} subtasks</span>` : ''}
+                ${task.retry_count > 0 ? `<span class="tag">retry&nbsp;${task.retry_count}</span>` : ''}
+                ${task.iteration ? `<span class="tag">iter&nbsp;${task.iteration}</span>` : ''}
+            </div>
+        </div>`;
 
-    // Always render subtasks (they may be hidden by CSS/display)
+    // Subtasks container
     if (isParent) {
         const subtasksHtml = task.subtasks.map(subtask => renderTaskWithChildren(subtask, depth + 1)).join('');
-        // Wrap subtasks in a container for easier hiding/showing
         html += `<div class="task-subtasks" data-parent-id="${task.id}" ${subtasksDisplay}>${subtasksHtml}</div>`;
     }
 
@@ -930,10 +980,15 @@ function switchTab(tabName) {
     }
 }
 
-// Update last update timestamp
+// Update last update timestamp (relative "Xs ago" format)
 function updateLastUpdateTime() {
-    const time = lastUpdate.toLocaleTimeString();
-    document.getElementById('last-update').textContent = `Last updated: ${time}`;
+    const el = document.getElementById('last-update');
+    if (!lastUpdate) { el.textContent = '—'; return; }
+    const elapsed = Math.floor((Date.now() - lastUpdate.getTime()) / 1000);
+    if (elapsed < 5)        el.textContent = 'just now';
+    else if (elapsed < 60)  el.textContent = `${elapsed}s ago`;
+    else if (elapsed < 3600) el.textContent = `${Math.floor(elapsed / 60)}m ago`;
+    else                    el.textContent = `${Math.floor(elapsed / 3600)}h ago`;
 }
 
 // Set poll status indicator
@@ -941,10 +996,10 @@ function setPollStatus(success) {
     const status = document.getElementById('poll-status');
     if (success) {
         status.classList.remove('error');
-        status.textContent = '● Polling...';
+        status.textContent = 'Live';
     } else {
         status.classList.add('error');
-        status.textContent = '● Error';
+        status.textContent = 'Error';
     }
 }
 
@@ -1266,6 +1321,10 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// ============================================================================
+// Chat Functions
+// ============================================================================
 
 // ============================================================================
 // Chat Functions
