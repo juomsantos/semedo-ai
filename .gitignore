@@ -9,6 +9,9 @@ outbox/
 failed/
 validation/
 
+# Chroma DB files
+rag_api/chroma_db/*
+
 # Python
 __pycache__/
 *.py[cod]
@@ -33,4 +36,4 @@ Thumbs.db
 test_setup.py
 
 # Claude session files
-.claude/worktrees/
+.claude/
