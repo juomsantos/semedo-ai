@@ -14,8 +14,10 @@ Endpoints:
 
 import sys
 import shutil
+import requests as _requests
 from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.utils import secure_filename
 from flask_cors import CORS
 
 # Add dashboard to path
@@ -30,6 +32,7 @@ PROJECT_ROOT = dashboard_dir.parent
 # Add scripts to path for task_io import
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from shared.task_io import create_task_file
+from shared.config import load_config as _load_config
 
 # Initialize Flask app
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -281,6 +284,110 @@ def clear_cache():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Context file upload
+# ---------------------------------------------------------------------------
+
+@app.route("/api/upload-context", methods=["POST"])
+def upload_context_files():
+    """Upload one or more local files into context/ and return their Windows paths."""
+    if "files" not in request.files:
+        return jsonify({"error": "No files provided"}), 400
+
+    context_dir = PROJECT_ROOT / "context"
+    context_dir.mkdir(exist_ok=True)
+
+    uploaded = []
+    errors = []
+
+    for file in request.files.getlist("files"):
+        if not file.filename:
+            continue
+        filename = secure_filename(file.filename)
+        if not filename:
+            errors.append(f"Invalid filename: {file.filename!r}")
+            continue
+        dest = context_dir / filename
+        # Avoid silent overwrite — append a counter if the name is taken
+        counter = 1
+        while dest.exists():
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix
+            dest = context_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+        file.save(str(dest))
+        uploaded.append({
+            "name": file.filename,
+            "saved_as": dest.name,
+            "path": str(dest),          # absolute Windows path — safe for context_files
+        })
+
+    if not uploaded and errors:
+        return jsonify({"error": "; ".join(errors)}), 400
+
+    return jsonify({"uploaded": uploaded, "errors": errors}), 200
+
+
+# ---------------------------------------------------------------------------
+# RAG API proxy endpoints
+# ---------------------------------------------------------------------------
+
+def _rag_base_url() -> str:
+    try:
+        return _load_config().rag_api_url()
+    except Exception:
+        return "http://localhost:8000"
+
+
+@app.route("/api/rag/documents", methods=["GET"])
+def rag_list_documents():
+    """List all documents in the knowledge base."""
+    try:
+        resp = _requests.get(f"{_rag_base_url()}/documents", timeout=10)
+        return jsonify(resp.json()), resp.status_code
+    except _requests.exceptions.ConnectionError:
+        return jsonify({"error": "RAG API unavailable"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/rag/ingest", methods=["POST"])
+def rag_ingest():
+    """Ingest a document into the knowledge base."""
+    try:
+        body = request.get_json() or {}
+        resp = _requests.post(f"{_rag_base_url()}/ingest", json=body, timeout=600)
+        return jsonify(resp.json()), resp.status_code
+    except _requests.exceptions.ConnectionError:
+        return jsonify({"error": "RAG API unavailable"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/rag/documents/<doc_id>", methods=["DELETE"])
+def rag_delete_document(doc_id):
+    """Delete a document from the knowledge base."""
+    try:
+        resp = _requests.delete(f"{_rag_base_url()}/documents/{doc_id}", timeout=10)
+        return jsonify(resp.json()), resp.status_code
+    except _requests.exceptions.ConnectionError:
+        return jsonify({"error": "RAG API unavailable"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/rag/status", methods=["GET"])
+def rag_status():
+    """Check RAG API liveness."""
+    try:
+        resp = _requests.get(f"{_rag_base_url()}/health", timeout=5)
+        return jsonify(resp.json()), resp.status_code
+    except _requests.exceptions.ConnectionError:
+        return jsonify({"status": "unavailable"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.errorhandler(404)

@@ -887,6 +887,182 @@ body {
     color: #ff6b6b;
 }
 
+/* =========================================================
+   Knowledge Base Tab
+   ========================================================= */
+
+.kb-status {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: #f0f0f0;
+    color: #666;
+}
+
+.kb-status-up {
+    background: #e6f9f0;
+    color: #27ae60;
+}
+
+.kb-status-down {
+    background: #fdecea;
+    color: #e74c3c;
+}
+
+.kb-ingest-panel {
+    background: white;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.kb-content-label-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.kb-content-label-row label {
+    margin-bottom: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+}
+
+.btn-kb-browse {
+    padding: 4px 10px;
+    background: #f5f7fa;
+    border: 1px solid #d0d7e2;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #444;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btn-kb-browse:hover {
+    background: #eaf0fb;
+    border-color: #0066cc;
+    color: #0066cc;
+}
+
+.kb-file-loaded {
+    margin-top: 6px;
+    padding: 8px 12px;
+    background: #f0f8ff;
+    border: 1px solid #b8d8f8;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #1a5f9e;
+}
+
+.kb-ingest-panel h4 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kb-docs-panel {
+    background: white;
+    border-radius: 8px;
+    padding: 20px 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.kb-docs-panel h4 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.btn-refresh {
+    background: none;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    color: #666;
+    transition: background 0.15s;
+}
+
+.btn-refresh:hover {
+    background: #f5f5f5;
+}
+
+.kb-docs-list {
+    margin-top: 12px;
+}
+
+.kb-doc-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    background: #fafafa;
+    transition: background 0.15s;
+}
+
+.kb-doc-item:hover {
+    background: #f0f4ff;
+}
+
+.kb-doc-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    overflow: hidden;
+}
+
+.kb-doc-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kb-doc-meta {
+    font-size: 11px;
+    color: #999;
+}
+
+.btn-kb-delete {
+    background: none;
+    border: none;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+    margin-left: 10px;
+}
+
+.btn-kb-delete:hover {
+    color: #e74c3c;
+    background: #fdecea;
+}
+
+.form-group-grow {
+    flex: 1;
+}
+
 /* Toast notifications */
 .toast-notification {
     position: fixed;
@@ -1102,6 +1278,50 @@ body {
 }
 
 /* Context Files Picker */
+.context-inputs-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.context-inputs-row .context-picker {
+    flex: 1;
+    min-width: 0;
+}
+
+.btn-browse-files {
+    flex-shrink: 0;
+    padding: 10px 14px;
+    background: #f5f7fa;
+    border: 1px solid #d0d7e2;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #444;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+    line-height: 1.4;
+}
+
+.btn-browse-files:hover {
+    background: #eaf0fb;
+    border-color: #0066cc;
+    color: #0066cc;
+}
+
+.btn-browse-files:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.context-file-uploading {
+    font-size: 12px;
+    color: #888;
+    margin-top: 6px;
+    font-style: italic;
+}
+
 .label-hint {
     font-weight: 400;
     color: #888;

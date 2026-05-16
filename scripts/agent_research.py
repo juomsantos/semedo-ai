@@ -32,6 +32,7 @@ from shared.task_io import (
 )
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.web_search import web_search, web_fetch
+from shared.rag_tool import rag_query
 from shared.logger import AgentLogger
 from shared.token_logger import log_tokens
 from shared.config import load_config
@@ -45,12 +46,13 @@ SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "research" / "system_prompt.md"
 # Per-tool call limits for the research agent
 MAX_SEARCH_TURNS = 5   # max web_search calls per task
 MAX_FETCH_TURNS  = 10  # max web_fetch calls per task
+MAX_RAG_TURNS    = 5   # max rag_query calls per task
 # Overall ceiling: prevents infinite loops if the model keeps calling tools
-MAX_TOOL_TURNS = MAX_SEARCH_TURNS + MAX_FETCH_TURNS
+MAX_TOOL_TURNS = MAX_SEARCH_TURNS + MAX_FETCH_TURNS + MAX_RAG_TURNS
 
 # Native tools — the ollama library introspects these functions' type
 # annotations and docstrings to auto-generate the JSON schemas.
-TOOLS = [web_search, web_fetch]
+TOOLS = [rag_query, web_search, web_fetch]
 
 
 def load_system_prompt() -> str:

@@ -26,6 +26,7 @@ from shared.task_io import (
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
+from shared.rag_tool import rag_query
 from shared.logger import AgentLogger
 from shared.token_logger import log_tokens
 from shared.config import load_config
@@ -55,6 +56,11 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     system_prompt = load_system_prompt()
     user_message = task["body"]
+
+    # Query the RAG knowledge base for relevant prior work / documentation
+    rag_results = rag_query(user_message[:500])
+    if rag_results and not rag_results.startswith("Knowledge base unavailable") and not rag_results.startswith("No results found"):
+        user_message = f"## Knowledge Base Context\n{rag_results}\n\n---\n\n{user_message}"
 
     # Include any context files referenced in the task
     context_files = task["meta"].get("context_files", [])

@@ -450,6 +450,52 @@ function renderContextDropdown(query) {
     dropdown.style.display = 'block';
 }
 
+// Handle local file picker selection — upload files and add as chips
+async function handleContextFilePicker(input) {
+    if (!input.files || input.files.length === 0) return;
+
+    const uploadingEl = document.getElementById('context-file-uploading');
+    const btn = document.querySelector('.btn-browse-files');
+    uploadingEl.style.display = 'block';
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+
+    try {
+        const formData = new FormData();
+        for (const file of input.files) {
+            formData.append('files', file);
+        }
+
+        const resp = await fetch('/api/upload-context', {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            showNotification(`Upload failed: ${data.error || 'unknown error'}`, 'error');
+            return;
+        }
+
+        for (const f of data.uploaded || []) {
+            // Use "file__{saved_as}" as the unique key so it won't collide with task IDs
+            addContextFile(`file__${f.saved_as}`, f.path, `📄 ${f.name}`);
+        }
+
+        if (data.errors && data.errors.length > 0) {
+            showNotification(`Some files skipped: ${data.errors.join(', ')}`, 'error');
+        } else {
+            showNotification(`${data.uploaded.length} file(s) added`, 'success');
+        }
+    } catch (e) {
+        showNotification(`Upload error: ${e.message}`, 'error');
+    } finally {
+        uploadingEl.style.display = 'none';
+        if (btn) { btn.disabled = false; btn.textContent = '📁 Browse files'; }
+        // Reset so the same file can be picked again if needed
+        input.value = '';
+    }
+}
+
 // Add a context file to the selection
 function addContextFile(taskId, outputPath, preview) {
     if (selectedContextFiles.some(s => s.task_id === taskId)) return; // deduplicate
@@ -531,6 +577,7 @@ async function submitTask(event) {
             // Reset context files picker
             selectedContextFiles = [];
             renderContextChips();
+            document.getElementById('context-file-input').value = '';
             completedTasksCache = []; // force a fresh fetch next time
             // Keep type and priority for quick resubmit
         } else {
@@ -867,6 +914,8 @@ function switchTab(tabName) {
     } else if (tabName === 'logs') {
         const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
         updateLogs(selectedAgent);
+    } else if (tabName === 'knowledge') {
+        loadKnowledgeBase();
     }
 }
 
@@ -968,6 +1017,229 @@ function showNotification(message, type = 'info') {
     setTimeout(() => {
         notification.remove();
     }, 2500);
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Base
+// ---------------------------------------------------------------------------
+
+// Read a file from disk and populate the KB ingest form
+function kbLoadFileIntoForm(input) {
+    if (!input.files || input.files.length === 0) return;
+    const file = input.files[0];
+
+    // Accept text-based files only
+    const textTypes = [
+        'text/', 'application/json', 'application/javascript',
+        'application/xml', 'application/x-yaml', 'application/x-sh',
+        'application/x-python',
+    ];
+    const isText = textTypes.some(t => file.type.startsWith(t)) || file.type === '';
+
+    if (!isText) {
+        showNotification(`Unsupported file type "${file.type || 'binary'}" — use plain text, markdown, code, or JSON files.`, 'error');
+        input.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const content = e.target.result;
+
+        // Populate content textarea
+        document.getElementById('kb-doc-content').value = content;
+
+        // Auto-fill title if empty
+        const titleEl = document.getElementById('kb-doc-title');
+        if (!titleEl.value.trim()) {
+            // Strip extension for a readable title
+            titleEl.value = file.name.replace(/\.[^.]+$/, '');
+        }
+
+        // Auto-fill source with filename
+        const sourceEl = document.getElementById('kb-doc-source');
+        if (!sourceEl.value.trim()) {
+            sourceEl.value = file.name;
+        }
+
+        // Show confirmation banner
+        const loaded = document.getElementById('kb-file-loaded');
+        loaded.style.display = 'block';
+        loaded.innerHTML = `📄 Loaded <strong>${escapeHtml(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB) — review below then click <em>Add to Knowledge Base</em>.`;
+
+        // Reset input so the same file can be reloaded if needed
+        input.value = '';
+    };
+    reader.onerror = () => {
+        showNotification(`Error reading file: ${file.name}`, 'error');
+        input.value = '';
+    };
+    reader.readAsText(file);
+}
+
+async function loadKnowledgeBase() {
+    const list = document.getElementById('kb-docs-list');
+    const badge = document.getElementById('kb-status-badge');
+
+    // Check RAG API status
+    try {
+        const statusResp = await fetch('/api/rag/status');
+        if (statusResp.status === 503) {
+            badge.textContent = '● Unavailable';
+            badge.className = 'kb-status kb-status-down';
+            list.innerHTML = '<p class="no-data">RAG API is not running. Start the scheduler to launch it automatically.</p>';
+            return;
+        }
+        badge.textContent = '● Online';
+        badge.className = 'kb-status kb-status-up';
+    } catch (e) {
+        badge.textContent = '● Unavailable';
+        badge.className = 'kb-status kb-status-down';
+        list.innerHTML = '<p class="no-data">RAG API is not reachable.</p>';
+        return;
+    }
+
+    // Load documents
+    list.innerHTML = '<p class="no-data">Loading...</p>';
+    try {
+        const resp = await fetch('/api/rag/documents');
+        const data = await resp.json();
+        const docs = data.documents || [];
+        if (docs.length === 0) {
+            list.innerHTML = '<p class="no-data">No documents in the knowledge base yet.</p>';
+            return;
+        }
+
+        // Group chunks by title + source so each document appears as one row
+        const groups = {};
+        for (const doc of docs) {
+            const title = doc.metadata?.title || 'Untitled';
+            const source = doc.metadata?.source || '';
+            const key = `${title}||${source}`;
+            if (!groups[key]) groups[key] = { title, source, ids: [] };
+            groups[key].ids.push(doc.id);
+        }
+
+        list.innerHTML = Object.values(groups).map(g => {
+            const chunkLabel = `${g.ids.length} chunk${g.ids.length !== 1 ? 's' : ''}`;
+            // Encode ids for an HTML attribute — must escape " to avoid closing the attribute early
+            const safeIds = JSON.stringify(g.ids).replace(/"/g, '&quot;');
+            return `
+                <div class="kb-doc-item">
+                    <div class="kb-doc-info">
+                        <span class="kb-doc-title">${escapeHtml(g.title)}</span>
+                        <span class="kb-doc-meta">${escapeHtml(g.source)}${g.source ? ' · ' : ''}${chunkLabel}</span>
+                    </div>
+                    <button class="btn-kb-delete"
+                        data-title="${escapeHtml(g.title)}"
+                        data-ids="${safeIds}"
+                        onclick="kbDeleteDocumentGroup(this)">✕ Delete</button>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        list.innerHTML = `<p class="no-data">Error loading documents: ${escapeHtml(e.message)}</p>`;
+    }
+}
+
+async function kbIngestDocument() {
+    const title = document.getElementById('kb-doc-title').value.trim();
+    const source = document.getElementById('kb-doc-source').value.trim();
+    const content = document.getElementById('kb-doc-content').value.trim();
+    const statusEl = document.getElementById('kb-ingest-status');
+    const msgEl = document.getElementById('kb-ingest-message');
+    const btn = document.getElementById('kb-ingest-btn');
+
+    if (!content) {
+        statusEl.style.display = 'block';
+        msgEl.className = 'submit-message error';
+        msgEl.textContent = 'Content is required.';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+    statusEl.style.display = 'none';
+
+    try {
+        // Generate a unique document_id (required by IngestRequest)
+        const document_id = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const body = { document_id, content, metadata: { title: title || 'Untitled', source: source || '' } };
+        const resp = await fetch('/api/rag/ingest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            // FastAPI validation errors return detail as an array of objects
+            let errMsg = data.error || 'Ingest failed';
+            if (data.detail) {
+                errMsg = Array.isArray(data.detail)
+                    ? data.detail.map(e => `${e.loc?.join('.')||''}: ${e.msg||e}`).join('; ')
+                    : String(data.detail);
+            }
+            throw new Error(errMsg);
+        }
+
+        statusEl.style.display = 'block';
+        msgEl.className = 'submit-message success';
+        msgEl.textContent = `✓ Document added (${data.chunks_created || data.document_ids?.length || 1} chunk(s))`;
+
+        // Clear form
+        document.getElementById('kb-doc-title').value = '';
+        document.getElementById('kb-doc-source').value = '';
+        document.getElementById('kb-doc-content').value = '';
+        const loadedBanner = document.getElementById('kb-file-loaded');
+        if (loadedBanner) loadedBanner.style.display = 'none';
+
+        // Refresh list
+        setTimeout(loadKnowledgeBase, 500);
+    } catch (e) {
+        statusEl.style.display = 'block';
+        msgEl.className = 'submit-message error';
+        msgEl.textContent = `✗ Error: ${e.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add to Knowledge Base';
+    }
+}
+
+async function kbDeleteDocumentGroup(btn) {
+    const title = btn.getAttribute('data-title');
+    const ids = JSON.parse(btn.getAttribute('data-ids'));
+    const chunkWord = ids.length !== 1 ? 'chunks' : 'chunk';
+    if (!confirm(`Delete "${title}" (${ids.length} ${chunkWord})?`)) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Deleting…';
+    try {
+        // Delete all chunks in parallel
+        const results = await Promise.allSettled(
+            ids.map(id => fetch(`/api/rag/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }))
+        );
+        const failures = results.filter(r => r.status === 'rejected').length;
+        if (failures > 0) {
+            showNotification(`Deleted with ${failures} error(s) — refreshing`, 'error');
+        } else {
+            showNotification(`Deleted "${title}" (${ids.length} ${chunkWord})`, 'success');
+        }
+        loadKnowledgeBase();
+    } catch (e) {
+        showNotification(`Delete failed: ${e.message}`, 'error');
+        btn.disabled = false;
+        btn.textContent = '✕ Delete';
+    }
+}
+
+async function kbDeleteDocument(docId) {
+    // Legacy single-chunk delete (kept for compatibility)
+    try {
+        await fetch(`/api/rag/documents/${encodeURIComponent(docId)}`, { method: 'DELETE' });
+        loadKnowledgeBase();
+    } catch (e) {
+        showNotification(`Delete failed: ${e.message}`, 'error');
+    }
 }
 
 // Format age in human-readable format

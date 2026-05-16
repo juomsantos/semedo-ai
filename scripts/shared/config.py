@@ -58,6 +58,10 @@ class ProjectConfig:
         """Check if timer-based polling should be enabled in the scheduler."""
         return self._config.get("scheduler", {}).get("enable_timer_polling", True)
 
+    def rag_api_url(self) -> str:
+        """Get the RAG API base URL."""
+        return self._config.get("rag_api", {}).get("url", "http://localhost:8000")
+
     def list_agents(self) -> list[str]:
         """Get list of all configured agents."""
         return list(self._config.get("agents", {}).keys())

@@ -77,6 +77,22 @@ Per-agent statistics showing:
 ### Logs Tab
 View agent execution logs. Select any agent (orchestrator, coder, research, qa, claude-code, scheduler). Shows last 50 log lines in **newest-first** order — most recent entry at the top.
 
+### Knowledge Base Tab
+Manage the local RAG knowledge base (requires the scheduler to be running, which starts the RAG API automatically).
+
+**Status badge:** shows whether the RAG API is Online or Unavailable. If unavailable, start the scheduler.
+
+**Add Document panel:**
+- **Title** — human-readable label for the document
+- **Source** (optional) — file path, URL, or any reference string
+- **Content** — paste any text: documentation, architecture notes, code snippets, prior results, etc.
+
+Click **Add to Knowledge Base** to chunk, embed, and store the content. The response shows how many chunks were created.
+
+**Stored Documents** — lists all documents currently in the vector store with their title and source. Click **✕** to delete a document permanently.
+
+Documents added here are immediately available to agents — the next task that triggers `rag_query` will find them.
+
 ### Submit Task Tab
 Submit a new task to the orchestrator directly from the dashboard without touching the filesystem.
 
@@ -255,6 +271,36 @@ Create a new task in `inbox/` (submits to the orchestrator).
 **Response (201):** `{"task_id": "task_20260507_...", "message": "Task submitted to orchestrator."}`
 
 **Error (400):** `{"error": "description is required"}`
+
+### GET /api/rag/status
+Check RAG API liveness.
+
+**Response (200):** `{"status": "ok"}` or similar health payload from the RAG API.
+
+**Response (503):** `{"status": "unavailable"}` when the RAG API process is not running.
+
+### GET /api/rag/documents
+List all documents in the knowledge base.
+
+**Response:** passes through the RAG API's `/documents` response (list of `{id, metadata}` objects).
+
+### POST /api/rag/ingest
+Add a document to the knowledge base. Proxied to `POST /ingest` on the RAG API.
+
+**Request body:**
+```json
+{
+  "content": "Text to embed and store...",
+  "metadata": { "title": "My Doc", "source": "architecture.md" }
+}
+```
+
+**Response:** passes through RAG API response (includes `chunks_created` or `document_ids`).
+
+### DELETE /api/rag/documents/:id
+Remove a document by ID.
+
+**Response:** passes through RAG API delete response.
 
 ### POST /api/clear-cache
 Delete all task files, agent logs, and token counters. Full system reset.

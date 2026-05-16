@@ -35,6 +35,7 @@ from shared.task_io import (
 )
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.web_search import web_search, web_fetch
+from shared.rag_tool import rag_query
 from shared.token_logger import log_tokens
 from shared.logger import AgentLogger
 from shared.config import load_config
@@ -48,11 +49,12 @@ SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "qa" / "system_prompt.md"
 # Per-tool call limits for the QA agent
 MAX_SEARCH_TURNS = 3   # max web_search calls per task
 MAX_FETCH_TURNS  = 6   # max web_fetch calls per task
-MAX_TOOL_TURNS = MAX_SEARCH_TURNS + MAX_FETCH_TURNS
+MAX_RAG_TURNS    = 5   # max rag_query calls per task
+MAX_TOOL_TURNS = MAX_SEARCH_TURNS + MAX_FETCH_TURNS + MAX_RAG_TURNS
 
 # Native tools — the ollama library introspects these functions' type
 # annotations and docstrings to auto-generate the JSON schemas.
-QA_TOOLS = [web_search, web_fetch]
+QA_TOOLS = [rag_query, web_search, web_fetch]
 
 LOCK_FILE = PROJECT_ROOT / "agents" / "qa" / "qa.lock"
 

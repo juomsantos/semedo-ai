@@ -52,6 +52,7 @@
             <button class="tab-btn" data-tab="agents">Agent Stats</button>
             <button class="tab-btn" data-tab="logs">Logs</button>
             <button class="tab-btn" data-tab="submit">Submit Task</button>
+            <button class="tab-btn" data-tab="knowledge">Knowledge Base</button>
         </nav>
 
         <!-- Active Tasks Tab -->
@@ -184,20 +185,35 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="context-search">Context Files <span class="label-hint">(optional — attach prior results)</span></label>
-                    <div class="context-picker">
-                        <input
-                            type="text"
-                            id="context-search"
-                            class="form-input context-search-input"
-                            placeholder="Search completed tasks by description..."
-                            autocomplete="off"
-                        />
-                        <div id="context-dropdown" class="context-dropdown" style="display:none;">
-                            <div id="context-dropdown-list" class="context-dropdown-list">
-                                <p class="context-no-results">Type to search completed tasks</p>
+                    <label>Context Files <span class="label-hint">(optional — attach prior results or local files)</span></label>
+                    <div class="context-inputs-row">
+                        <div class="context-picker">
+                            <input
+                                type="text"
+                                id="context-search"
+                                class="form-input context-search-input"
+                                placeholder="Search completed tasks by description..."
+                                autocomplete="off"
+                            />
+                            <div id="context-dropdown" class="context-dropdown" style="display:none;">
+                                <div id="context-dropdown-list" class="context-dropdown-list">
+                                    <p class="context-no-results">Type to search completed tasks</p>
+                                </div>
                             </div>
                         </div>
+                        <button type="button" class="btn-browse-files" onclick="document.getElementById('context-file-input').click()">
+                            📁 Browse files
+                        </button>
+                        <input
+                            type="file"
+                            id="context-file-input"
+                            multiple
+                            style="display:none"
+                            onchange="handleContextFilePicker(this)"
+                        />
+                    </div>
+                    <div id="context-file-uploading" class="context-file-uploading" style="display:none;">
+                        Uploading…
                     </div>
                     <div id="context-selected" class="context-selected" style="display:none;">
                         <!-- Chips injected here by JS -->
@@ -212,6 +228,54 @@
                     <div id="submit-message" class="submit-message"></div>
                 </div>
             </form>
+        </section>
+        <!-- Knowledge Base Tab -->
+        <section id="tab-knowledge" class="tab-content">
+            <div class="section-header">
+                <h3>Knowledge Base</h3>
+                <span id="kb-status-badge" class="kb-status">Checking...</span>
+            </div>
+
+            <!-- Ingest form -->
+            <div class="kb-ingest-panel">
+                <h4>Add Document</h4>
+                <div class="form-row">
+                    <div class="form-group form-group-grow">
+                        <label for="kb-doc-title">Title</label>
+                        <input type="text" id="kb-doc-title" class="form-input" placeholder="e.g. Architecture Notes" />
+                    </div>
+                    <div class="form-group">
+                        <label for="kb-doc-source">Source (optional)</label>
+                        <input type="text" id="kb-doc-source" class="form-input" placeholder="e.g. file.md or URL" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="kb-content-label-row">
+                        <label for="kb-doc-content">Content</label>
+                        <button type="button" class="btn-kb-browse" onclick="document.getElementById('kb-file-input').click()">📁 Load from file</button>
+                        <input type="file" id="kb-file-input" style="display:none" onchange="kbLoadFileIntoForm(this)" />
+                    </div>
+                    <textarea id="kb-doc-content" class="form-textarea" rows="6" placeholder="Paste text, code, or documentation here…  or use &#34;Load from file&#34; above."></textarea>
+                    <div id="kb-file-loaded" class="kb-file-loaded" style="display:none;"></div>
+                </div>
+                <div class="form-actions">
+                    <button id="kb-ingest-btn" class="btn btn-submit" onclick="kbIngestDocument()">Add to Knowledge Base</button>
+                </div>
+                <div id="kb-ingest-status" class="submit-status" style="display:none;">
+                    <div id="kb-ingest-message" class="submit-message"></div>
+                </div>
+            </div>
+
+            <!-- Document list -->
+            <div class="kb-docs-panel">
+                <div class="section-header">
+                    <h4>Stored Documents</h4>
+                    <button class="btn-refresh" onclick="loadKnowledgeBase()">↻ Refresh</button>
+                </div>
+                <div id="kb-docs-list" class="kb-docs-list">
+                    <p class="no-data">Loading...</p>
+                </div>
+            </div>
         </section>
     </main>
 

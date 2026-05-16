@@ -1,6 +1,6 @@
 # AI Team — Multi-Agent Architecture
 
-> Last updated: 2026-05-13
+> Last updated: 2026-05-16
 
 ## Overview
 
@@ -15,7 +15,7 @@ A team of agents coordinated through this shared folder. Agents are triggered by
    inbox/
         │
         ▼  file watcher triggers immediately; timer fallback every 0.5 min
-[Orchestrator: qwen3.5:9b]
+[Orchestrator: qwen3.5:9b]                    ←── rag_query() pre-prompt injection
    Phase 1 — VALIDATION: scan validation/, group by parent, LLM decides complete|refine|additional_work|redo
    Phase 2 — DEPENDENCY RESOLUTION: unblock tasks whose depends_on are satisfied, wire context_files
    Phase 3 — DISPATCH: decompose new inbox tasks, route to worker inboxes
@@ -25,12 +25,14 @@ A team of agents coordinated through this shared folder. Agents are triggered by
 [Coder]  [Research]   [Claude Code*]
 qwen3.5  qwen3.5:9b      claude CLI
   :9b    + web_search    *requires approval
-          + web_fetch
+  ↑RAG   + web_fetch                            ← rag_query tool in tool loop
+context  + rag_query
+injection
    │ chain_to: qa
    ▼
-[QA Agent: qwen3.5:9b + web_search + web_fetch]
+[QA Agent: qwen3.5:9b + web_search + web_fetch + rag_query]
    - Extracts code, executes via subprocess (30s timeout)
-   - Reviews with qwen3.5:9b; may search for error/library docs
+   - Reviews with qwen3.5:9b; may search for error/library docs or query knowledge base
    - PASS → validation/  (awaits orchestrator sign-off)
    - FAIL (retry_count=0) → new coder task with feedback
    - FAIL (retry_count=1) → failure report to failed/
@@ -47,6 +49,16 @@ outbox/       failed/         (max 5 validation iterations per task)
         │
         ▼
 [Claude (Cowork) reviews & delivers to João]
+
+                    ┌──────────────────────────────────┐
+                    │  RAG API (FastAPI + ChromaDB)     │
+                    │  http://localhost:8000            │
+                    │  Embed: qwen3-embedding:8b (4096) │
+                    │  Rerank: cosine similarity        │
+                    │  Started + monitored by scheduler │
+                    └──────────────────────────────────┘
+                           ↑ rag_query() calls from all agents
+                           ↑ ingest via dashboard KB tab or POST /ingest
 ```
 
 ## Folder Structure
@@ -56,8 +68,8 @@ AI Team/
   ARCHITECTURE.md              ← this file
   CLAUDE.md                    ← project instructions for Claude (Cowork)
   DASHBOARD.md                 ← dashboard usage and REST API reference
-  config.json                  ← runtime config (Ollama URL, models, dashboard port)
-  RUN_SCHEDULER.bat            ← Windows quick-start (agents only)
+  config.json                  ← runtime config (Ollama URL, models, dashboard port, rag_api.url)
+  RUN_SCHEDULER.bat            ← Windows quick-start (agents + RAG API)
   RUN_SCHEDULER.sh             ← Linux/Mac quick-start
   inbox/                       ← drop task files here to start work
   processing/                  ← parent tasks held during validation loop (+ orchestrator.lock)
@@ -65,6 +77,15 @@ AI Team/
   outbox/                      ← approved & truly completed results
   failed/                      ← QA failure reports + hard-errored tasks
   context/                     ← optional shared context files for tasks
+  rag_api/                     ← Local knowledge base service
+    main.py                    ← FastAPI app: /health /ingest /query /documents /documents/<id>
+    config.py                  ← Settings (plain class, os.getenv; NOT pydantic_settings)
+    ollama_client.py           ← embed() via /api/embeddings; rerank() via cosine similarity
+    vector_store.py            ← ChromaDBPersistentClient; get() flat lists, query() nested lists
+    ingestion.py               ← TextChunker + DocumentLoader
+    models.py                  ← Pydantic v2 request/response models
+    requirements.txt           ← fastapi, uvicorn[standard], chromadb, pydantic, requests
+    chroma_db/                 ← ChromaDB persistent storage (auto-created on first run)
   agents/
     orchestrator/
       system_prompt.md         ← decomposition & routing prompt (3 decision types)
@@ -82,12 +103,12 @@ AI Team/
       inbox/
       system_prompt.md
   dashboard/                   ← real-time web monitoring UI (Flask)
-    app.py                     ← REST API server
+    app.py                     ← REST API server (includes RAG proxy endpoints)
     run_dashboard.py           ← launcher (reads config.json)
     task_monitor.py            ← filesystem scanner
-    templates/index.html       ← dashboard UI
-    static/dashboard.js        ← frontend polling logic + task hierarchy rendering
-    static/dashboard.css       ← styling
+    templates/index.html       ← dashboard UI (includes Knowledge Base tab)
+    static/dashboard.js        ← frontend polling logic + KB management functions
+    static/dashboard.css       ← styling (includes KB tab styles)
   logs/                        ← per-agent execution traces at logs/<agent>/general.log
   scripts/
     shared/
@@ -95,15 +116,16 @@ AI Team/
       ollama_client.py         ← Ollama wrapper: chat() and chat_with_tools(); sets OLLAMA_API_KEY env var before importing ollama library
       token_logger.py          ← appends {ts, task_id, prompt, completion} to logs/<agent>/tokens.jsonl
       web_search.py            ← web_search() and web_fetch() wrappers delegating to ollama Python library
+      rag_tool.py              ← rag_query(query, top_k) → str; POST /query to RAG API; graceful fallback
       file_watcher.py          ← TaskWatcher: watchdog-based file event monitoring for immediate agent triggering
       logger.py                ← file + stdout logging, UTC timestamps
-      config.py                ← config.json loader (ProjectConfig class)
-    agent_orchestrator.py      ← 3-phase loop: validate, resolve deps, dispatch
-    agent_coder.py
-    agent_research.py
+      config.py                ← config.json loader (ProjectConfig class, includes rag_api_url())
+    agent_orchestrator.py      ← 3-phase loop: validate, resolve deps, dispatch; RAG pre-prompt injection
+    agent_coder.py             ← RAG pre-prompt injection before user_message construction
+    agent_research.py          ← rag_query in TOOLS list (up to 5 RAG calls per task)
     agent_claude_code.py
-    agent_qa.py
-    scheduler.py               ← cross-platform scheduler: file watcher + optional timer polling
+    agent_qa.py                ← rag_query in QA_TOOLS list (up to 5 RAG calls per task)
+    scheduler.py               ← cross-platform scheduler: file watcher + optional timer polling + RAG API process management
 ```
 
 ## Task File Format
@@ -208,11 +230,11 @@ All scripts live in `scripts/`. Each is standalone and invoked by the scheduler.
 
 | Script | Model | Inbox | Timer interval* | Notes |
 |---|---|---|---|---|
-| `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 0.5 min | 3-phase loop per run |
-| `agent_coder.py` | qwen3.5:9b | `agents/coder/inbox/` | 1.5 min | skips tasks with unresolved `depends_on` |
-| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 1 min | web search: 5 calls + 10 fetches max per task |
+| `agent_orchestrator.py` | qwen3.5:9b | `inbox/` | 0.5 min | 3-phase loop; RAG pre-prompt injection at decomposition |
+| `agent_coder.py` | qwen3.5:9b | `agents/coder/inbox/` | 1.5 min | skips tasks with unresolved `depends_on`; RAG pre-prompt injection |
+| `agent_research.py` | qwen3.5:9b | `agents/research/inbox/` | 1 min | web: 5 search + 10 fetch + 5 RAG calls max (20 total turns) |
 | `agent_claude_code.py` | Claude Code CLI | `agents/claude-code/inbox/` | 2.5 min | tasks arrive via manual approval from `pending/` |
-| `agent_qa.py` | qwen3.5:9b | `agents/qa/inbox/` | 2 min | web search: 3 calls + 6 fetches max per task |
+| `agent_qa.py` | qwen3.5:9b | `agents/qa/inbox/` | 2 min | web: 3 search + 6 fetch + 5 RAG calls max (14 total turns) |
 
 \* Timer intervals only apply when `scheduler.enable_timer_polling: true` in `config.json`. Currently **disabled** — agents are triggered exclusively by the file watcher (see below).
 
@@ -390,6 +412,60 @@ All runtime settings in `config.json` at the project root, loaded via `scripts/s
 - `agents.<name>.process_timeout` — scheduler-level kill timeout for the entire agent subprocess. Must be larger than `ollama.timeout × max_tool_turns` to avoid killing an agent mid-tool-loop. Research is set to 1800s (30 min) to accommodate long multi-fetch loops.
 - `scheduler.enable_timer_polling` — when `false` (default), agents are triggered only by the file watcher. Set to `true` to enable interval-based polling as a fallback or supplement.
 
+## RAG API
+
+The knowledge base is a standalone FastAPI service living in `rag_api/`. It is started and monitored by the scheduler — no separate terminal needed.
+
+### Endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Liveness check |
+| `/ingest` | POST | Add a document (chunked + embedded into ChromaDB) |
+| `/query` | POST | Semantic search; returns top-k chunks with scores |
+| `/documents` | GET | List all stored document IDs and metadata |
+| `/documents/{id}` | GET | Retrieve a specific document |
+| `/documents/{id}` | DELETE | Remove a document |
+
+### Embedding and Reranking
+
+- **Embedding model:** `qwen3-embedding:8b` via `POST /api/embeddings` on the Ollama server. Response key is `"embedding"` (flat list, dim=4096).
+- **Reranking:** cosine similarity computed from the same embedding model — no native `/api/rerank` endpoint exists in Ollama. Documents are re-scored by computing `cosine_sim(query_embedding, doc_embedding)` and sorted descending.
+- **Fallback vector:** `[0.0] * 4096` used when embedding fails (so ingestion/query never crashes, though retrieval quality for that chunk will be zero).
+
+### ChromaDB API Quirks
+
+`collection.get()` (for listing or fetching by ID) returns **flat lists**: `ids`, `documents`, `metadatas` are plain Python lists. `collection.query()` (for semantic search) returns **nested lists** — one inner list per query vector: `results['ids'][0]`, `results['documents'][0]`, etc. Mixing these up causes IndexError or returns wrong data.
+
+### Scheduler Lifecycle
+
+The `AgentScheduler` manages the RAG API as a persistent Popen subprocess:
+
+1. After health checks and `.pyc` flush, `_start_rag_api()` launches `uvicorn main:app --host 0.0.0.0 --port 8000` in the `rag_api/` directory.
+2. Every 30 seconds in the main loop, `_check_rag_api()` calls `process.poll()`. If the process has exited, it restarts automatically.
+3. On `KeyboardInterrupt`, `_stop_rag_api()` calls `process.terminate()` with a 5-second wait, then `process.kill()` as a fallback.
+
+### Agent Integration
+
+Two integration patterns are used, depending on agent type:
+
+**Pre-prompt injection** (coder, orchestrator) — before building `user_message`, the agent calls `rag_query(task_body[:500])`. If results are found, they are prepended as a `## Knowledge Base Context` section. If the RAG API is unavailable or returns no results, the message is left unchanged — fully transparent degradation.
+
+**Tool in loop** (research, QA) — `rag_query` is added to the `TOOLS` / `QA_TOOLS` list alongside `web_search` and `web_fetch`. The model decides when to call it during its reasoning loop, up to `MAX_RAG_TURNS = 5` calls per task, counted against the same `MAX_TOOL_TURNS` ceiling. The tool follows the same callable-with-type-annotations pattern as the web tools so the Ollama library auto-generates its JSON schema.
+
+### Dashboard Integration
+
+The dashboard proxies all RAG API calls through Flask endpoints to avoid CORS issues:
+
+| Dashboard endpoint | Proxies to RAG API |
+|---|---|
+| `GET /api/rag/status` | `GET /health` |
+| `GET /api/rag/documents` | `GET /documents` |
+| `POST /api/rag/ingest` | `POST /ingest` |
+| `DELETE /api/rag/documents/<id>` | `DELETE /documents/<id>` |
+
+The **Knowledge Base** tab in the dashboard lets João paste text/docs, set a title and source, and ingest them without touching the CLI. It also lists all stored documents and provides per-document delete buttons.
+
 ## Scheduler Startup Sequence
 
 Before spawning any agent subprocesses, `scheduler.py run()` performs these steps in order:
@@ -400,9 +476,11 @@ Before spawning any agent subprocesses, `scheduler.py run()` performs these step
 
 3. **Health-check import** — test-imports `scripts/shared/task_io.py` using `importlib.util`. If the import fails (syntax error, truncation, etc.) the scheduler logs a `FATAL` error and returns without starting any agents.
 
-4. **Initialize file watchers** — starts `TaskWatcher` for all task folders. Falls back gracefully to timer-only mode if `watchdog` is not installed.
+4. **Start RAG API** — launches `uvicorn main:app` as a persistent `Popen` subprocess in the `rag_api/` directory. Logs success or failure to the scheduler log. If `uvicorn` is not installed, a warning is logged and the scheduler continues (agents will degrade gracefully — RAG unavailability returns a plain string, not an exception).
 
-5. **Start scheduling loop** — if `enable_timer_polling: true`, also initialises timer-based scheduling.
+5. **Initialize file watchers** — starts `TaskWatcher` for all task folders. Falls back gracefully to timer-only mode if `watchdog` is not installed.
+
+6. **Start scheduling loop** — if `enable_timer_polling: true`, also initialises timer-based scheduling. The main loop also calls `_check_rag_api()` every 30 seconds to restart the RAG API if it has exited.
 
 ## QA Feedback
 
@@ -432,6 +510,10 @@ REST endpoints:
 | `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
 | `POST /api/tasks/submit` | Create a task in `inbox/` directly from the dashboard |
 | `POST /api/clear-cache` | Delete all task files, logs, and token counters (full reset) |
+| `GET /api/rag/status` | RAG API liveness (proxies `/health`) |
+| `GET /api/rag/documents` | List all documents in the knowledge base |
+| `POST /api/rag/ingest` | Add a document to the knowledge base |
+| `DELETE /api/rag/documents/<id>` | Remove a document from the knowledge base |
 
 See `DASHBOARD.md` for full API docs, configuration, and troubleshooting.
 

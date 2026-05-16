@@ -36,5 +36,8 @@
     "port": 5000,
     "debug": false,
     "poll_interval": 1500
+  },
+  "rag_api": {
+    "url": "http://localhost:8000"
   }
 }

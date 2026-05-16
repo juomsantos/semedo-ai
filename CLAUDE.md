@@ -8,20 +8,25 @@ All agents are built and running with a continuous **orchestrator validation loo
 
 ## What's Running
 
-A three-tier multi-agent system:
+A three-tier multi-agent system with a shared knowledge base:
 
 1. **Claude (Cowork)** — master coordinator, writes tasks to `inbox/`
-2. **Orchestrator** (`qwen3.5:9b`) — triggered by file watcher (immediate) or timer fallback (0.5 min); runs 3 phases per cycle: validate completed work → resolve task dependencies → decompose and dispatch new tasks
+2. **Orchestrator** (`qwen3.5:9b`) — triggered by file watcher (immediate) or timer fallback (0.5 min); runs 3 phases per cycle: validate completed work → resolve task dependencies → decompose and dispatch new tasks; queries RAG API before decomposition to surface relevant prior work
 3. **Workers:**
-   - `qwen3.5:9b` (coder) — code generation; skips tasks with unresolved dependencies
-   - `qwen3.5:9b` (research) — research, summarization, Q&A; live `web_search` (up to 5 calls) + `web_fetch` (up to 10 calls) via Ollama Python library
+   - `qwen3.5:9b` (coder) — code generation; skips tasks with unresolved dependencies; queries RAG API for relevant documentation before processing each task
+   - `qwen3.5:9b` (research) — research, summarization, Q&A; live `web_search` (up to 5 calls) + `web_fetch` (up to 10 calls) + `rag_query` (up to 5 calls) via Ollama Python library tool loop
    - `claude CLI` (claude-code) — complex/reasoning tasks; tasks require manual approval first (land in `agents/claude-code/pending/` before `inbox/`)
-   - `qwen3.5:9b` (qa) — code review + execution testing; live `web_search` (up to 3 calls) + `web_fetch` (up to 6 calls) via Ollama Python library
+   - `qwen3.5:9b` (qa) — code review + execution testing; live `web_search` (up to 3 calls) + `web_fetch` (up to 6 calls) + `rag_query` (up to 5 calls) via Ollama Python library tool loop
 
-4. **Dashboard** (`Flask`) — real-time web UI at `http://localhost:5000`; start with `python dashboard/run_dashboard.py`
+4. **RAG API** (`FastAPI` + `ChromaDB`) — local knowledge base at `http://localhost:8000`; started automatically by the scheduler; accepts documents via POST `/ingest`, serves semantic search via POST `/query`. Embedding: `qwen3-embedding:8b` (dim=4096). Reranking: cosine similarity via the embedding model (no native Ollama `/api/rerank` endpoint required).
+5. **Dashboard** (`Flask`) — real-time web UI at `http://localhost:5000`; start with `python dashboard/run_dashboard.py`; includes **Knowledge Base** tab for ingesting and managing documents
 
 ## Key Technical Decisions
 
+- **RAG API** (`rag_api/main.py`) — FastAPI + ChromaDB persistent vector store. Embedding via `qwen3-embedding:8b` at `http://192.168.1.13:11434/api/embeddings` (response key `"embedding"`, dim=4096). Reranking implemented as cosine similarity using the embedding model (no native `/api/rerank` endpoint in Ollama). Config: `rag_api/config.py` uses plain `class Settings` with `os.getenv()` — **not** `pydantic_settings.BaseSettings` (not installed). ChromaDB `collection.get()` returns **flat lists**; `collection.query()` returns **nested lists** (one row per query vector) — critical distinction for indexing. URL configured in `config.json → rag_api.url` (default `http://localhost:8000`), accessible via `ProjectConfig.rag_api_url()`. Dependencies in `rag_api/requirements.txt`.
+- **RAG tool** (`scripts/shared/rag_tool.py`) — `rag_query(query: str, top_k: int = 5) -> str` follows the same pattern as `web_search.py`; returns a plain `str` (not a dict) so it is compatible with the Ollama tool-calling library which introspects type annotations. Graceful degradation: returns a plain error string (not an exception) if the RAG API is unavailable, so the tool loop continues normally without crashing.
+- **RAG context injection** — two modes of integration: (1) **tool** — research and QA agents include `rag_query` in their `TOOLS` list; the model decides when to call it (up to 5 `rag_query` turns per task, combined with web search/fetch turns in the same `MAX_TOOL_TURNS` ceiling); (2) **pre-prompt injection** — coder and orchestrator call `rag_query(task_body[:500])` before building `user_message`, prepending results as a `## Knowledge Base Context` section if any relevant results are found. Unavailable or empty results are silently skipped — no change to behaviour when the RAG API is down.
+- **RAG API lifecycle** — `scheduler.py` manages the RAG API as a persistent subprocess (`subprocess.Popen`) rather than a one-shot script. `_start_rag_api()` launches `uvicorn main:app` in the `rag_api/` directory at startup; `_check_rag_api()` polls the process every 30 seconds and restarts it if it has exited; `_stop_rag_api()` terminates it gracefully (with `SIGKILL` fallback) on scheduler shutdown.
 - **Ollama Python library** (`ollama.Client`) used for all LLM calls to `http://192.168.1.13:11434`; replaced raw `requests` calls in `ollama_client.py`
 - **Tool-calling loop** (`chat_with_tools`) used by research and QA agents; tools passed as **Python callables** — the library auto-generates JSON schemas from type annotations. Web tools (`web_search`, `web_fetch`) are defined in `shared/web_search.py` and delegate to `ollama.web_search()` / `ollama.web_fetch()` from the ollama Python library; API key in `config.json → web_search.ollama_api_key`. **Critical:** `OLLAMA_API_KEY` env var must be set *before* `import ollama` runs — `ollama_client.py` handles this by setting the env var from config at import time, making it the first shared import in every agent script.
 - **File watcher** (`scripts/shared/file_watcher.py`) — `TaskWatcher` (watchdog library) monitors `inbox/`, `validation/`, and all worker inboxes for `.task.md` events. When a file appears (or is modified), it coalesces bursts within 0.5s and triggers the relevant agent immediately via `scheduler.trigger_agent()`. Also scans for pre-existing files on startup. **Timer-based polling is optional** — controlled by `config.json → scheduler.enable_timer_polling` (currently `false`; agents are triggered exclusively by the file watcher). Requires `watchdog>=3.0.0` in `requirements.txt`; degrades gracefully if not installed.
@@ -68,7 +73,7 @@ AI Team/
   CLAUDE.md                              ← you are here
   ARCHITECTURE.md                        ← full design doc
   DASHBOARD.md                           ← dashboard usage and API reference
-  config.json                            ← centralized config
+  config.json                            ← centralized config (includes rag_api.url)
   RUN_SCHEDULER.bat / RUN_SCHEDULER.sh   ← quick-start scripts
   requirements.txt
   inbox/                   ← drop .task.md files here to submit work
@@ -77,6 +82,15 @@ AI Team/
   outbox/                  ← approved & completed results
   failed/                  ← QA failure reports + hard-errored tasks
   context/                 ← optional shared context files for tasks
+  rag_api/                 ← Local knowledge base (FastAPI + ChromaDB)
+    main.py                ← FastAPI app; endpoints: /health /ingest /query /documents
+    config.py              ← Settings class (plain os.getenv, NOT pydantic_settings)
+    ollama_client.py       ← OllamaClient: embed() via /api/embeddings; rerank() via cosine sim
+    vector_store.py        ← ChromaDBPersistentClient wrapper
+    ingestion.py           ← TextChunker + DocumentLoader
+    models.py              ← Pydantic v2 request/response models
+    requirements.txt       ← fastapi, uvicorn, chromadb, pydantic, requests
+    chroma_db/             ← ChromaDB persistent storage (auto-created)
   agents/
     orchestrator/
       system_prompt.md             ← decomposition & routing prompt
@@ -103,9 +117,10 @@ AI Team/
       task_io.py          ← task file I/O, dependency resolution, validation grouping
       ollama_client.py    ← Ollama REST wrapper (chat + chat_with_tools); stores last_token_counts
       token_logger.py     ← appends per-call token usage to logs/<agent>/tokens.jsonl
-      web_search.py       ← DuckDuckGo search wrapper
+      web_search.py       ← web_search() and web_fetch() tool wrappers
+      rag_tool.py         ← rag_query(query, top_k) → str tool wrapper for the RAG API
       logger.py           ← UTC-correct logger
-      config.py           ← config.json loader
+      config.py           ← config.json loader (includes rag_api_url() method)
     agent_orchestrator.py
     agent_coder.py
     agent_research.py
@@ -116,20 +131,26 @@ AI Team/
 
 ## Running the System
 
-**Terminal 1 — Agents:**
+**Terminal 1 — Agents + RAG API:**
 ```
 RUN_SCHEDULER.bat        (Windows)
 RUN_SCHEDULER.sh         (Linux/Mac)
 ```
 Or manually: `python scripts/scheduler.py`
 
-Logs: `logs/scheduler/general.log` and `logs/<agent>/general.log`. Press Ctrl+C to stop.
+The scheduler automatically starts the RAG API (`uvicorn` at `http://localhost:8000`) and keeps it alive. Logs: `logs/scheduler/general.log` and `logs/<agent>/general.log`. Press Ctrl+C to stop all agents and the RAG API.
+
+**RAG API prerequisites** (first time only):
+```bash
+cd rag_api
+pip install -r requirements.txt
+```
 
 **Terminal 2 — Dashboard (optional):**
 ```bash
 python dashboard/run_dashboard.py
 ```
-Open `http://localhost:5000`. Runs independently of the scheduler.
+Open `http://localhost:5000`. Runs independently of the scheduler. The **Knowledge Base** tab lets you add, view, and delete documents from the RAG API without touching the filesystem.
 
 ## Submitting a Task
 
@@ -172,4 +193,5 @@ The orchestrator picks it up within 1 minute, decomposes it, and routes subtasks
 2. **Worker-initiated research** — allow coder/QA to drop tasks in `research/inbox/` mid-execution and yield until resolved
 3. **Webhooks** — notify when tasks complete
 4. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
-5. **RAG** — embedding + rerank for context-aware routing
+5. **RAG auto-ingestion** — automatically ingest completed task results and context files into the knowledge base so agents accumulate project knowledge over time without manual uploads
+6. **RAG dashboard search** — add a query box to the Knowledge Base tab so João can search the vector store from the browser

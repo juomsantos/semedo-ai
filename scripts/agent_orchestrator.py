@@ -51,6 +51,7 @@ from shared.task_io import (
 )
 from shared.token_logger import log_tokens
 from shared.ollama_client import OllamaClient, OllamaError
+from shared.rag_tool import rag_query
 from shared.logger import AgentLogger
 from shared.config import load_config
 
@@ -909,7 +910,14 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     system_prompt = load_system_prompt()
     # Convert datetime objects to ISO strings for JSON serialization
     meta_for_json = {k: v.isoformat() if hasattr(v, 'isoformat') else v for k, v in task['meta'].items()}
-    user_message = f"---\n{json.dumps(meta_for_json, indent=2)}\n---\n\n{task['body']}"
+    task_body = task['body']
+
+    # Query the RAG knowledge base for relevant prior work / documentation
+    rag_results = rag_query(task_body[:500])
+    if rag_results and not rag_results.startswith("Knowledge base unavailable") and not rag_results.startswith("No results found"):
+        task_body = f"## Knowledge Base Context\n{rag_results}\n\n---\n\n{task_body}"
+
+    user_message = f"---\n{json.dumps(meta_for_json, indent=2)}\n---\n\n{task_body}"
 
     try:
         response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)

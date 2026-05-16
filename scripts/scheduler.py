@@ -40,6 +40,10 @@ AGENTS = [
 ]
 
 
+RAG_API_DIR = PROJECT_ROOT / "rag_api"
+RAG_API_CHECK_INTERVAL = 30  # seconds between liveness checks
+
+
 class AgentScheduler:
     def __init__(self):
         self.log = AgentLogger("scheduler")
@@ -47,6 +51,102 @@ class AgentScheduler:
         self.next_run_times = {}
         self.watcher = None
         self._watcher_enabled = False
+        self._rag_process = None
+        self._rag_last_check = time.time()  # Start clock now — first check after RAG_API_CHECK_INTERVAL
+        self._rag_restart_count = 0         # Consecutive restart failures
+        self._rag_max_restarts = 5          # Give up after this many back-to-back crashes
+
+    def _start_rag_api(self):
+        """Start the RAG API server as a persistent background process."""
+        if not RAG_API_DIR.exists():
+            self.log.warning(f"RAG API directory not found at {RAG_API_DIR} — skipping")
+            return
+
+        main_py = RAG_API_DIR / "main.py"
+        if not main_py.exists():
+            self.log.warning(f"RAG API main.py not found at {main_py} — skipping")
+            return
+
+        try:
+            kwargs = {}
+            if platform.system() == "Windows":
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                kwargs["start_new_session"] = True
+
+            self._rag_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+                cwd=str(RAG_API_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **kwargs,
+            )
+            self._rag_restart_count = 0  # Reset on any successful process spawn
+            msg = f"✓ RAG API started (PID {self._rag_process.pid})"
+            self.log.info(msg)
+            print(msg)
+        except FileNotFoundError:
+            msg = "✗ uvicorn not found — install it: pip install uvicorn[standard]"
+            self.log.warning(msg)
+            print(msg)
+        except Exception as e:
+            msg = f"✗ Failed to start RAG API: {e}"
+            self.log.error(msg)
+            print(msg)
+
+    def _check_rag_api(self):
+        """Check if the RAG API process is alive; restart it if not."""
+        now = time.time()
+        if now - self._rag_last_check < RAG_API_CHECK_INTERVAL:
+            return
+        self._rag_last_check = now
+
+        if self._rag_process is None:
+            return
+
+        if self._rag_process.poll() is not None:
+            pid = self._rag_process.pid
+            # Capture stderr to surface the crash reason
+            stderr_snippet = ""
+            try:
+                raw = self._rag_process.stderr.read()
+                if raw:
+                    stderr_snippet = raw.decode("utf-8", errors="replace").strip()[-600:]
+            except Exception:
+                pass
+
+            self._rag_process = None
+            self._rag_restart_count += 1
+
+            if stderr_snippet:
+                self.log.error(f"RAG API (PID {pid}) stderr:\n{stderr_snippet}")
+
+            if self._rag_restart_count > self._rag_max_restarts:
+                self.log.error(
+                    f"RAG API crashed {self._rag_restart_count} times in a row — "
+                    f"stopping restart attempts. Fix the error above and restart the scheduler."
+                )
+                return
+
+            self.log.warning(
+                f"RAG API (PID {pid}) exited "
+                f"(attempt {self._rag_restart_count}/{self._rag_max_restarts}) — restarting"
+            )
+            self._start_rag_api()
+
+    def _stop_rag_api(self):
+        """Terminate the RAG API process on shutdown."""
+        if self._rag_process and self._rag_process.poll() is None:
+            try:
+                self._rag_process.terminate()
+                self._rag_process.wait(timeout=5)
+                self.log.info(f"RAG API stopped (PID {self._rag_process.pid})")
+            except Exception as e:
+                self.log.error(f"Error stopping RAG API: {e}")
+                try:
+                    self._rag_process.kill()
+                except Exception:
+                    pass
 
     def _check_ollama_availability(self) -> bool:
         """Check if Ollama server is reachable. Log and print results."""
@@ -216,6 +316,9 @@ class AgentScheduler:
             self.log.info("Timer-based polling DISABLED — relying on file watcher only")
 
         while not self.stop_event.wait(1):  # Check every second
+            # Keep RAG API alive
+            self._check_rag_api()
+
             # Only check timer-based scheduling if enabled
             if timer_polling_enabled:
                 now = datetime.fromtimestamp(time.time(), tz=timezone.utc)
@@ -263,6 +366,9 @@ class AgentScheduler:
             print(msg)
             return  # Abort — do not start agents
 
+        # Start the RAG API server
+        self._start_rag_api()
+
         # Initialize file watchers for immediate task detection
         self._init_watchers()
 
@@ -280,6 +386,9 @@ class AgentScheduler:
                     self.log.info("File watcher stopped")
                 except Exception as e:
                     self.log.error(f"Error stopping file watcher: {e}")
+
+            # Stop RAG API
+            self._stop_rag_api()
 
             self.log.info("Scheduler exited cleanly")
 
