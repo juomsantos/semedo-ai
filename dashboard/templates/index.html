@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Team Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+    <header class="header">
+        <div class="header-logo">
+            <div class="header-logo-icon">⬡</div>
+            <span class="header-logo-text">AI Team</span>
+        </div>
+        <div class="header-meta">
+            <div class="live-indicator">
+                <span class="live-dot"></span>
+                <span id="poll-status">Live</span>
+            </div>
+            <span id="last-update" class="last-update-text">—</span>
+            <button id="clear-cache-btn" class="btn-ghost">Clear cache</button>
+            <div class="theme-toggle">
+                <div class="toggle-track" onclick="toggleTheme()">
+                    <div class="toggle-thumb"></div>
+                </div>
+                <span class="toggle-icon" id="toggle-icon">🌙</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="layout">
+
+        <!-- Metrics Strip -->
+        <div class="metrics-strip">
+            <div class="metric-card m-pending">
+                <div class="metric-number" id="metric-pending">0</div>
+                <div class="metric-label">Pending</div>
+            </div>
+            <div class="metric-card m-approval">
+                <div class="metric-number" id="metric-approval">0</div>
+                <div class="metric-label">Awaiting Approval</div>
+            </div>
+            <div class="metric-card m-processing">
+                <div class="metric-number" id="metric-processing">0</div>
+                <div class="metric-label">Processing</div>
+            </div>
+            <div class="metric-card m-completed">
+                <div class="metric-number" id="metric-completed">0</div>
+                <div class="metric-label">Completed</div>
+            </div>
+            <div class="metric-card m-failed">
+                <div class="metric-number" id="metric-failed">0</div>
+                <div class="metric-label">Failed</div>
+            </div>
+        </div>
+
+        <!-- Tab Nav -->
+        <nav class="tab-nav">
+            <button class="tab-btn active" data-tab="active">Active Tasks</button>
+            <button class="tab-btn" data-tab="approvals">Approvals <span id="approval-badge" class="tab-badge" style="display:none">0</span></button>
+            <button class="tab-btn" data-tab="history">History</button>
+            <button class="tab-btn" data-tab="agents">Agent Stats</button>
+            <button class="tab-btn" data-tab="logs">Logs</button>
+            <button class="tab-btn" data-tab="submit">Submit Task</button>
+            <button class="tab-btn" data-tab="chat">Chat</button>
+            <button class="tab-btn" data-tab="knowledge">Knowledge Base</button>
+        </nav>
+
+        <!-- Active Tasks Tab -->
+        <section id="tab-active" class="tab-content active">
+            <div class="section-hdr">
+                <span class="section-title">Currently Active</span>
+                <span class="section-count" id="active-count">0 tasks</span>
+            </div>
+            <div id="active-tasks" class="tasks-list">
+                <p class="no-data">No tasks processing</p>
+            </div>
+        </section>
+
+        <!-- Approvals Tab -->
+        <section id="tab-approvals" class="tab-content">
+            <div class="section-hdr">
+                <span class="section-title">Awaiting Approval — Claude Code Tasks</span>
+                <span class="section-count" id="approval-count">0 tasks</span>
+            </div>
+            <div id="approval-tasks" class="tasks-list">
+                <p class="no-data">No tasks awaiting approval</p>
+            </div>
+        </section>
+
+        <!-- History Tab -->
+        <section id="tab-history" class="tab-content">
+            <div class="section-hdr">
+                <span class="section-title">Task History</span>
+                <div class="filters">
+                    <select id="history-filter" class="select-dark">
+                        <option value="">All Statuses</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                </div>
+            </div>
+            <div id="history-tasks" class="tasks-list">
+                <p class="no-data">No tasks</p>
+            </div>
+        </section>
+
+        <!-- Agent Stats Tab -->
+        <section id="tab-agents" class="tab-content">
+            <div class="section-hdr">
+                <span class="section-title">Agent Statistics</span>
+            </div>
+            <div id="agent-stats" class="agent-stats">
+                <table class="stats-table">
+                    <thead>
+                        <tr>
+                            <th>Agent</th>
+                            <th>Completed</th>
+                            <th>Errors</th>
+                            <th>Prompt Tokens</th>
+                            <th>Completion Tokens</th>
+                            <th>LLM Calls</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agent-stats-body">
+                        <tr><td colspan="6" class="no-data">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Logs Tab -->
+        <section id="tab-logs" class="tab-content">
+            <div class="section-hdr">
+                <span class="section-title">Agent Logs</span>
+                <select id="log-agent-select" class="select-dark">
+                    <option value="orchestrator">Orchestrator</option>
+                    <option value="coder">Coder</option>
+                    <option value="research">Research</option>
+                    <option value="qa">QA</option>
+                    <option value="claude-code">Claude Code</option>
+                    <option value="scheduler">Scheduler</option>
+                </select>
+            </div>
+            <div id="logs-container" class="log-stream">
+                <div id="logs-list" class="log-inner">
+                    <p class="no-data">No logs</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Submit Task Tab -->
+        <section id="tab-submit" class="tab-content">
+            <div class="form-wrap">
+                <div class="section-hdr">
+                    <span class="section-title">Submit Task</span>
+                </div>
+                <form id="submit-task-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="task-type">Type</label>
+                            <select id="task-type" name="type" class="form-select" required>
+                                <option value="code">Code</option>
+                                <option value="research">Research</option>
+                                <option value="summarize">Summarize</option>
+                                <option value="review">Review</option>
+                                <option value="plan">Plan</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="task-priority">Priority</label>
+                            <select id="task-priority" name="priority" class="form-select" required>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                                <option value="low">Low</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="task-description">Description</label>
+                        <textarea id="task-description" name="description" class="form-textarea" rows="6"
+                            placeholder="Describe what you want the agents to build or research..." required></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="task-expected-output">
+                            Expected Output <span class="form-hint">(optional)</span>
+                        </label>
+                        <textarea id="task-expected-output" name="expected_output" class="form-textarea" rows="3"
+                            placeholder="What should the result look like?"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">
+                            Context Files <span class="form-hint">(optional — attach prior results or local files)</span>
+                        </label>
+                        <div class="context-inputs-row">
+                            <div class="context-picker">
+                                <input type="text" id="context-search" class="form-input context-search-input"
+                                    placeholder="Search completed tasks by description..." autocomplete="off" />
+                                <div id="context-dropdown" class="context-dropdown" style="display:none;">
+                                    <div id="context-dropdown-list" class="context-dropdown-list">
+                                        <p class="context-no-results">Type to search completed tasks</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="button" class="btn-ghost btn-browse-files"
+                                onclick="document.getElementById('context-file-input').click()">📁 Browse files</button>
+                            <input type="file" id="context-file-input" multiple style="display:none"
+                                onchange="handleContextFilePicker(this)" />
+                        </div>
+                        <div id="context-file-uploading" class="context-file-uploading" style="display:none;">Uploading…</div>
+                        <div id="context-selected" class="context-selected" style="display:none;"></div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" id="submit-btn" class="btn-primary">Submit Task</button>
+                    </div>
+
+                    <div id="submit-status" class="submit-status" style="display:none;">
+                        <div id="submit-message" class="submit-message"></div>
+                    </div>
+                </form>
+            </div>
+        </section>
+
+        <!-- Chat Tab -->
+        <section id="tab-chat" class="tab-content">
+            <div class="section-hdr">
+                <span class="section-title">Chat with LLM</span>
+                <button class="btn-ghost" onclick="clearChatHistory()">Clear history</button>
+            </div>
+            <div id="chat-messages" class="chat-messages"></div>
+            <div class="chat-input-row">
+                <textarea id="chat-input" class="chat-textarea"
+                    placeholder="Ask about tasks, pipeline status, research questions, or create new tasks… (Ctrl+Enter to send)"
+                    rows="3"></textarea>
+                <button id="chat-send-btn" class="btn-primary" onclick="sendChatMessage()">Send</button>
+            </div>
+        </section>
+
+        <!-- Knowledge Base Tab -->
+        <section id="tab-knowledge" class="tab-content">
+            <div class="section-hdr">
+                <span class="section-title">Knowledge Base</span>
+                <span id="kb-status-badge" class="kb-status">Checking…</span>
+            </div>
+
+            <div class="kb-panel">
+                <div class="kb-panel-title">Add Document</div>
+                <div class="form-row">
+                    <div class="form-group form-group-grow">
+                        <label class="form-label" for="kb-doc-title">Title</label>
+                        <input type="text" id="kb-doc-title" class="form-input" placeholder="e.g. Architecture Notes" />
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="kb-doc-source">
+                            Source <span class="form-hint">(optional)</span>
+                        </label>
+                        <input type="text" id="kb-doc-source" class="form-input" placeholder="e.g. file.md or URL" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="kb-content-label-row">
+                        <label class="form-label" for="kb-doc-content">Content</label>
+                        <button type="button" class="btn-ghost"
+                            onclick="document.getElementById('kb-file-input').click()">📁 Load from file</button>
+                        <input type="file" id="kb-file-input" style="display:none" onchange="kbLoadFileIntoForm(this)" />
+                    </div>
+                    <textarea id="kb-doc-content" class="form-textarea" rows="6"
+                        placeholder="Paste text, code, or documentation here… or use &quot;Load from file&quot; above."></textarea>
+                    <div id="kb-file-loaded" class="kb-file-loaded" style="display:none;"></div>
+                </div>
+                <div class="form-actions">
+                    <button id="kb-ingest-btn" class="btn-primary" onclick="kbIngestDocument()">Add to Knowledge Base</button>
+                </div>
+                <div id="kb-ingest-status" class="submit-status" style="display:none;">
+                    <div id="kb-ingest-message" class="submit-message"></div>
+                </div>
+            </div>
+
+            <div class="kb-panel">
+                <div class="section-hdr" style="margin-bottom:12px;">
+                    <span class="kb-panel-title" style="margin-bottom:0;">Stored Documents</span>
+                    <button class="btn-ghost" onclick="loadKnowledgeBase()">↻ Refresh</button>
+                </div>
+                <div id="kb-docs-list" class="kb-docs-list">
+                    <p class="no-data">Loading...</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Task Detail Modal -->
+    <div id="task-modal" class="modal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <span class="modal-title" id="modal-title">Task Details</span>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div id="modal-body" class="modal-body">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Payload Modal -->
+    <div id="payload-modal" class="modal">
+        <div class="modal-box payload-modal-content">
+            <div class="modal-header">
+                <span class="modal-title" id="payload-modal-title">Task Payload</span>
+                <button class="modal-close" onclick="closePayloadModal()">&times;</button>
+            </div>
+            <div id="payload-modal-body" class="modal-body payload-modal-body">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ── Theme toggle ──────────────────────────────────────────
+    function toggleTheme() {
+        const html = document.documentElement;
+        const isLight = html.getAttribute('data-theme') === 'light';
+        const next = isLight ? 'dark' : 'light';
+        html.setAttribute('data-theme', next);
+        document.getElementById('theme-label').textContent = isLight ? 'A — Dark' : 'B — Light';
+        document.getElementById('toggle-icon').textContent  = isLight ? '🌙' : '☀️';
+        try { localStorage.setItem('dashboard-theme', next); } catch(e) {}
+    }
+
+    // Restore persisted theme before first paint
+    (function () {
+        try {
+            const saved = localStorage.getItem('dashboard-theme');
+            if (saved && saved !== 'dark') {
+                document.documentElement.setAttribute('data-theme', saved);
+            }
+        } catch(e) {}
+    })();
+
+    // Sync toggle label/icon after DOM ready
+    document.addEventListener('DOMContentLoaded', function () {
+        const saved = document.documentElement.getAttribute('data-theme') || 'dark';
+        const label = document.getElementById('theme-label');
+        const icon  = document.getElementById('toggle-icon');
+        if (label) label.textContent = saved === 'light' ? 'B — Light' : 'A — Dark';
+        if (icon)  icon.textContent  = saved === 'light' ? '☀️' : '🌙';
+    });
+    </script>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

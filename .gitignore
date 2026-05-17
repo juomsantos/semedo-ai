@@ -1,0 +1,39 @@
+# Logs
+logs/
+*.log
+
+# Task management
+inbox/
+processing/
+outbox/
+failed/
+validation/
+
+# Chroma DB files
+rag_api/chroma_db/*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_setup.py
+
+# Claude session files
+.claude/
