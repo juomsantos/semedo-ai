@@ -12,7 +12,15 @@ from models import (
     QueryRequest, QueryResponse,
     DocumentListResponse, ErrorResponse,
     HealthResponse,
+    MAX_INGEST_CONTENT_CHARS,
 )
+
+# Maximum HTTP request body size in bytes — slightly above the ingest content
+# cap to leave headroom for JSON framing, document_id, metadata, and UTF-8
+# multi-byte expansion (1 char can be up to 4 bytes encoded). Enforced via
+# Content-Length so we reject oversized payloads *before* reading the body
+# into memory.
+_MAX_REQUEST_BODY_BYTES = MAX_INGEST_CONTENT_CHARS * 4 + 64 * 1024
 from ingestion import TextChunker, DocumentLoader
 from ollama_client import OllamaClient
 from vector_store import ChromaDBPersistentClient
@@ -71,6 +79,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_size_limit_middleware(request: Request, call_next):
+    """Reject requests whose Content-Length exceeds the ingest cap.
+
+    Stops a malicious or buggy client from streaming a huge body into memory
+    before Pydantic validation has a chance to reject it. Returns 413 Payload
+    Too Large, which is the correct HTTP status for this condition.
+
+    Note: chunked / unknown-length requests bypass this check — those would
+    still hit the Pydantic ``max_length`` ceiling once buffered. Uvicorn's
+    own body buffer is bounded by the process memory.
+    """
+    from starlette.responses import JSONResponse
+
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > _MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": "Payload too large",
+                        "max_bytes": _MAX_REQUEST_BODY_BYTES,
+                        "received_bytes": int(content_length),
+                    },
+                )
+        except ValueError:
+            # Malformed Content-Length — let downstream handle it
+            pass
+    return await call_next(request)
 
 
 @app.middleware("http")
