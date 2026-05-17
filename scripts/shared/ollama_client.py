@@ -43,8 +43,9 @@ try:
         os.environ["OLLAMA_API_KEY"] = _api_key
     OLLAMA_BASE_URL = _config.ollama_base_url()
     DEFAULT_TIMEOUT = _config.ollama_timeout()
-except Exception:
-    OLLAMA_BASE_URL = "http://192.168.1.13:11434"
+except Exception as e:
+    print(f"[WARNING] Failed to load config.json, using defaults: {e}")
+    OLLAMA_BASE_URL = "http://localhost:11434"
     DEFAULT_TIMEOUT = 300
 
 import ollama as _ollama
@@ -186,11 +187,19 @@ class OllamaClient:
         return {"type": "text", "content": message.content or ""}
 
     def is_available(self) -> bool:
-        """Return True if Ollama is reachable."""
+        """Return True if Ollama is reachable.
+
+        Any failure (network, auth, server error) means "not available", so we
+        deliberately catch broadly here — but log at debug so issues are not silent.
+        """
         try:
             self._client.list()
             return True
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(
+                f"Ollama is_available() check failed: {type(e).__name__}: {e}"
+            )
             return False
 
     def list_models(self) -> list[str]:

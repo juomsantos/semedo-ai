@@ -23,6 +23,7 @@ from shared.task_io import (
     mark_awaiting_validation,
     mark_failed,
     create_task_file,
+    safe_read_context,
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
@@ -67,9 +68,9 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     if context_files:
         context_content = []
         for cf in context_files:
-            cf_path = Path(cf)
-            if cf_path.exists():
-                context_content.append(f"### {cf_path.name}\n```\n{cf_path.read_text(encoding='utf-8')}\n```")
+            content = safe_read_context(cf, logger=log)
+            if content is not None:
+                context_content.append(f"### {Path(cf).name}\n```\n{content}\n```")
         if context_content:
             user_message = "\n\n".join(context_content) + "\n\n---\n\n" + user_message
 

@@ -202,24 +202,50 @@ async function updateApprovals() {
     try {
         const response = await fetch('/api/pending-approvals');
         const data = await response.json();
-        
+
         const container = document.getElementById('approval-tasks');
         const count = document.getElementById('approval-count');
         const badge = document.getElementById('approval-badge');
-        
+
         count.textContent = `${data.count} ${data.count === 1 ? 'task' : 'tasks'}`;
         badge.textContent = data.count;
         badge.style.display = data.count > 0 ? 'inline' : 'none';
-        
+
         if (data.tasks.length === 0) {
             container.innerHTML = '<p class="no-data">No tasks awaiting approval</p>';
             return;
         }
-        
+
         container.innerHTML = data.tasks.map(task => createApprovalTaskElement(task)).join('');
+
+        // Set up event delegation for approve/reject buttons
+        setupApprovalButtons(container);
     } catch (error) {
         console.error('Error updating approvals:', error);
     }
+}
+
+// Set up event delegation for approval action buttons
+function setupApprovalButtons(container) {
+    container.addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-action]');
+        if (!button) return;
+
+        event.stopPropagation();
+        const taskId = button.getAttribute('data-task-id');
+        const action = button.getAttribute('data-action');
+
+        if (!taskId) {
+            console.error('Missing task ID on approval button');
+            return;
+        }
+
+        if (action === 'approve') {
+            approveTask(taskId);
+        } else if (action === 'reject') {
+            rejectTask(taskId);
+        }
+    });
 }
 
 // Create approval task element HTML
@@ -245,8 +271,8 @@ function createApprovalTaskElement(task) {
                 <span class="subtask-prog">${task.created_by}</span>
             </div>
             <div class="approval-actions">
-                <button class="btn-approve" onclick="event.stopPropagation();approveTask('${task.id}')">✓ Approve</button>
-                <button class="btn-reject" onclick="event.stopPropagation();rejectTask('${task.id}')">✕ Reject</button>
+                <button class="btn-approve" data-task-id="${task.id}" data-action="approve">✓ Approve</button>
+                <button class="btn-reject" data-task-id="${task.id}" data-action="reject">✕ Reject</button>
             </div>
         </div>
     `;

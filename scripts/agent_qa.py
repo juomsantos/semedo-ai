@@ -31,6 +31,7 @@ from shared.task_io import (
     mark_awaiting_validation,
     mark_failed,
     create_task_file,
+    safe_read_context,
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
@@ -506,12 +507,11 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         return
 
     coder_result_path = Path(context_files[0])
-    if not coder_result_path.exists():
-        log.error(f"Context file not found: {coder_result_path}")
+    result_content = safe_read_context(context_files[0], logger=log)
+    if result_content is None:
+        log.error(f"Primary context file unreadable or outside project root: {context_files[0]}")
         mark_failed(task_path)
         return
-
-    result_content = coder_result_path.read_text(encoding="utf-8")
 
     if not result_content.strip():
         log.error(f"Empty result file: {coder_result_path}")
@@ -528,12 +528,10 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     # Read any additional context files (prior coder iterations) for the LLM reviewer
     prior_results = []
     for cf in context_files[1:]:
-        cf_path = Path(cf)
-        if cf_path.exists():
-            prior_results.append(cf_path.read_text(encoding="utf-8"))
-            log.info(f"Loaded prior context: {cf_path.name}")
-        else:
-            log.warning(f"Prior context file not found, skipping: {cf}")
+        content = safe_read_context(cf, logger=log)
+        if content is not None:
+            prior_results.append(content)
+            log.info(f"Loaded prior context: {Path(cf).name}")
 
     # Python execution only — extract_code gives us the runnable snippet
     execution = execute_code(code, language, log)

@@ -90,7 +90,8 @@ def acquire_lock(log: "AgentLogger") -> bool:
             else:
                 log.warning(f"Removing stale lockfile (PID {pid} no longer running)")
                 LOCK_FILE.unlink()
-        except Exception:
+        except (OSError, ValueError) as e:
+            log.warning(f"Removing unreadable lockfile ({type(e).__name__}: {e})")
             LOCK_FILE.unlink(missing_ok=True)
 
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -287,7 +288,8 @@ def _find_qa_for_output(output_path: str):
                 if any(Path(cf).name == output_name
                        for cf in task["meta"].get("context_files", [])):
                     return "pending", task
-            except Exception:
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     for folder in done_dirs:
@@ -301,7 +303,8 @@ def _find_qa_for_output(output_path: str):
                 if any(Path(cf).name == output_name
                        for cf in task["meta"].get("context_files", [])):
                     return "done", task
-            except Exception:
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     return "not_found", None
@@ -377,7 +380,8 @@ def _find_retry_coder_output(qa_task: dict):
                 task = read_task(task_file)
                 if _matches(task):
                     return None  # Still running — not ready
-            except Exception:
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     # Check done dirs
@@ -392,7 +396,8 @@ def _find_retry_coder_output(qa_task: dict):
                 output_path = task["meta"].get("output_path", "")
                 if output_path and Path(output_path).exists():
                     return output_path
-            except Exception:
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     # Check failed/ — retry coder crashed or timed out; chain is exhausted
@@ -404,7 +409,8 @@ def _find_retry_coder_output(qa_task: dict):
                 task = read_task(task_file)
                 if _matches(task):
                     return _RETRY_CODER_FAILED
-            except Exception:
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     return None
@@ -480,7 +486,8 @@ def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, clie
         if outbox_candidate.exists():
             try:
                 parent_meta = read_task(outbox_candidate)["meta"]
-            except Exception:
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                log.warning(f"Could not read outbox parent {outbox_candidate.name}: {type(e).__name__}: {e}")
                 parent_meta = {}
             if parent_meta.get("status") == "complete":
                 # Parent finished (e.g. force-completed before restart) — subtasks are
@@ -873,8 +880,8 @@ def recover_orphaned_validation_subtasks(log: AgentLogger):
                         parent_meta = read_task(outbox_parent)["meta"]
                         if parent_meta.get("status") == "complete":
                             orphaned = True
-                    except Exception:
-                        pass
+                    except (OSError, ValueError, UnicodeDecodeError) as e:
+                        log.debug(f"Could not read parent {outbox_parent.name} during orphan recovery: {type(e).__name__}: {e}")
 
             # Case 2: no parent_task_id but result file already written to outbox/
             # (covers QA tasks and QA-dispatched retry coders that completed but
