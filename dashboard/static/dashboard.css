@@ -90,10 +90,10 @@
   --s-pending-border:    rgba(29,78,216,0.20);
   --pill-pending-text:   #1d4ed8;
 
-  --s-processing:           #b45309;
-  --s-processing-bg:        rgba(180,83,9,0.07);
-  --s-processing-border:    rgba(180,83,9,0.20);
-  --pill-processing-text:   #b45309;
+  --s-processing:           #0891b2;
+  --s-processing-bg:        rgba(8,145,178,0.08);
+  --s-processing-border:    rgba(8,145,178,0.22);
+  --pill-processing-text:   #0e7490;
 
   --s-completed:            #047857;
   --s-completed-bg:         rgba(4,120,87,0.07);
