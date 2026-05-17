@@ -4,10 +4,21 @@ from typing import Optional, List
 from pydantic import BaseModel, Field
 
 
+# Maximum size of a single ingested document's content (in characters).
+# 5 MB ≈ ~1.25M tokens — large enough for any reasonable document (a long book
+# is ~1-2 MB; the project's CLAUDE.md is 25 KB) but small enough to prevent a
+# malicious or buggy client from exhausting memory or ChromaDB disk space.
+MAX_INGEST_CONTENT_CHARS = 5_000_000
+
+
 class IngestRequest(BaseModel):
     """Request model for document ingestion."""
-    document_id: str = Field(..., description="Unique identifier for the document")
-    content: str = Field(..., description="Document content to ingest")
+    document_id: str = Field(..., max_length=512, description="Unique identifier for the document")
+    content: str = Field(
+        ...,
+        max_length=MAX_INGEST_CONTENT_CHARS,
+        description=f"Document content to ingest (max {MAX_INGEST_CONTENT_CHARS} chars)",
+    )
     metadata: Optional[dict] = Field(default_factory=dict, description="Document metadata")
 
 
