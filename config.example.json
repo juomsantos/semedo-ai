@@ -1,0 +1,49 @@
+{
+  "web_search": {
+    "ollama_api_key": "your-ollama-api-key-here"
+  },
+  "ollama": {
+    "base_url": "http://localhost:11434",
+    "timeout": 360
+  },
+  "agents": {
+    "orchestrator": {
+      "model": "qwen3.5:9b",
+      "process_timeout": 600
+    },
+    "coder": {
+      "model": "qwen3.5:9b",
+      "process_timeout": 600
+    },
+    "research": {
+      "model": "qwen3.5:9b",
+      "process_timeout": 1800
+    },
+    "qa": {
+      "model": "qwen3.5:9b",
+      "process_timeout": 1200
+    },
+    "claude-code": {
+      "cli": true,
+      "timeout": 300,
+      "process_timeout": 600
+    }
+  },
+  "scheduler": {
+    "enable_timer_polling": false
+  },
+  "dashboard": {
+    "port": 5000,
+    "debug": false,
+    "poll_interval": 1500
+  },
+  "rag_api": {
+    "url": "http://localhost:8000"
+  },
+  "chat": {
+    "model": "qwen3.5:9b",
+    "timeout": 120,
+    "max_history_turns": 20,
+    "max_tool_turns": 8
+  }
+}

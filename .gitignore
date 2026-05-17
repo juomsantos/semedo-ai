@@ -1,3 +1,6 @@
+# Config (contains API keys — use config.example.json as a template)
+config.json
+
 # Logs
 logs/
 *.log
