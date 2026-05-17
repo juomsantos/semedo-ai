@@ -103,12 +103,16 @@ AI Team/
       inbox/
       system_prompt.md
   dashboard/                   ← real-time web monitoring UI (Flask)
-    app.py                     ← REST API server (includes RAG proxy endpoints)
+    app.py                     ← REST API server (includes chat, RAG proxy, and approval endpoints)
     run_dashboard.py           ← launcher (reads config.json)
     task_monitor.py            ← filesystem scanner
-    templates/index.html       ← dashboard UI (includes Knowledge Base tab)
-    static/dashboard.js        ← frontend polling logic + KB management functions
-    static/dashboard.css       ← styling (includes KB tab styles)
+    templates/index.html       ← dashboard UI (includes Knowledge Base and Chat tabs)
+    static/dashboard.js        ← frontend polling logic + KB management + chat functions
+    static/dashboard.css       ← styling
+    agent_chat.py              ← chat LLM tool-calling loop (rag_query, web_search, web_fetch; max 8 turns)
+    chat_context.py            ← pipeline snapshot builder; deep task context injector (body, result, logs)
+    chat_session.py            ← in-memory UUID-keyed session store; max 20 history turns per session
+    chat_system_prompt.md      ← chat system prompt template; {PIPELINE_SNAPSHOT} and {TODAY} placeholders
   logs/                        ← per-agent execution traces at logs/<agent>/general.log
   scripts/
     shared/
@@ -402,7 +406,8 @@ All runtime settings in `config.json` at the project root, loaded via `scripts/s
     "claude-code":  { "cli": true, "timeout": 300, "process_timeout": 600 }
   },
   "scheduler": { "enable_timer_polling": false },
-  "dashboard": { "port": 5000, "debug": false, "poll_interval": 1500 }
+  "dashboard": { "port": 5000, "debug": false, "poll_interval": 1500 },
+  "chat": { "model": "qwen3.5:9b", "timeout": 120, "max_history_turns": 20, "max_tool_turns": 8 }
 }
 ```
 
@@ -509,15 +514,4 @@ REST endpoints:
 | `POST /api/pending-approvals/<id>/approve` | Move task to `agents/claude-code/inbox/` |
 | `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
 | `POST /api/tasks/submit` | Create a task in `inbox/` directly from the dashboard |
-| `POST /api/clear-cache` | Delete all task files, logs, and token counters (full reset) |
-| `GET /api/rag/status` | RAG API liveness (proxies `/health`) |
-| `GET /api/rag/documents` | List all documents in the knowledge base |
-| `POST /api/rag/ingest` | Add a document to the knowledge base |
-| `DELETE /api/rag/documents/<id>` | Remove a document from the knowledge base |
-
-See `DASHBOARD.md` for full API docs, configuration, and troubleshooting.
-
-## Diagrams
-
-- `ai-team-architecture.drawio` — System topology
-- `ai-team-message-flows.drawio` — Message flow and QA loop
+| `POST /api/clear-cache` | Delete
