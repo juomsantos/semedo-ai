@@ -158,6 +158,7 @@ AI Team/
     test_token_logger.py       ← tokens.jsonl output, task-ID format filter
     test_ollama_client.py      ← chat() and chat_with_tools() with mocked Ollama
     test_orchestrator_helpers.py ← QA chain discovery and verdict extraction
+    test_task_monitor.py       ← dashboard's frontmatter parser + approve/reject flows
   pytest.ini                   ← pytest config (testpaths, addopts, filterwarnings)
   requirements-dev.txt         ← pytest, pytest-cov
   scripts/
@@ -618,6 +619,7 @@ filterwarnings = ignore::DeprecationWarning:frontmatter
 | `test_token_logger.py` | `shared/token_logger.py` | JSONL output, task-ID regex filter rejects test/dev IDs, agent dir creation |
 | `test_ollama_client.py` | `shared/ollama_client.py` | `chat()` + `chat_with_tools()` with the inner `_ollama.Client` mocked; error mapping (`ResponseError`, connection-error message → "Cannot connect", timeout → "timed out"); tool-call argument decoding (dict, JSON string, malformed) |
 | `test_orchestrator_helpers.py` | `agent_orchestrator.py` | `_find_qa_for_output` across in-flight + done dirs; `_find_retry_coder_output` timestamp guard and failed-sentinel; `_extract_qa_verdict` PASS/FAIL/UNKNOWN paths |
+| `test_task_monitor.py` | `dashboard/task_monitor.py` | `_parse_yaml_frontmatter` correctness across Windows paths, lists, nested dicts, colons-in-values, comments; end-to-end `get_pending_approvals` / `approve_task` / `reject_task` with all frontmatter fields preserved |
 
 ### Fixtures (`tests/conftest.py`)
 

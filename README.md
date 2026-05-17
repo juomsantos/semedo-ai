@@ -280,10 +280,12 @@ What's covered today:
 | `shared/ollama_client.py` | `chat`, `chat_with_tools`, error mapping (network mocked) | 94% |
 | `shared/task_io.py` | frontmatter round-trip, `mark_processing`, `safe_read_context` traversal defense, dependency wiring | 91% |
 | `agent_orchestrator.py` | pure helpers: `_find_qa_for_output`, `_find_retry_coder_output`, `_find_qa_for_coder_subtask`, `_extract_qa_verdict` | partial (LLM-driven logic deferred) |
+| `dashboard/task_monitor.py` | frontmatter parser (Windows paths, lists, nested dicts, colons-in-values), `get_pending_approvals`, `approve_task`, `reject_task` | partial (full monitor surface deferred) |
 
 What's **not** covered yet: `file_watcher.py` (needs watchdog mocking),
 `web_search.py` (network wrapper), the orchestrator's decomposition and
-validation loops (need full LLM mocking), and the Flask dashboard endpoints.
+validation loops (need full LLM mocking), and the rest of the Flask
+dashboard endpoints.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md#testing) for how the test fixtures
 work and conventions for adding new tests.

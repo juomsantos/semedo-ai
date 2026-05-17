@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import re
 
+import yaml
+
 
 class TaskMonitor:
     """Scan file system for task status and metrics."""
@@ -412,36 +414,25 @@ class TaskMonitor:
             return None
 
     def _parse_yaml_frontmatter(self, yaml_str: str) -> Dict[str, Any]:
-        """Simple YAML parser for frontmatter. Handles Windows paths with backslashes."""
-        data = {}
-        for line in yaml_str.split("\n"):
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
+        """Parse a task file's YAML frontmatter block.
 
-            if ":" in line:
-                try:
-                    key, value = line.split(":", 1)
-                    key = key.strip()
-                    value = value.strip()
-
-                    # Remove surrounding quotes, but preserve backslashes in paths
-                    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-                        value = value[1:-1]
-
-                    # Convert numeric fields to int
-                    if key in ("retry_count", "iteration"):
-                        try:
-                            value = int(value)
-                        except ValueError:
-                            pass
-
-                    data[key] = value
-                except Exception:
-                    # Skip lines that can't be parsed
-                    continue
-
-        return data
+        Uses ``yaml.safe_load`` rather than a hand-rolled parser. Earlier
+        versions of this method split on the first ``:`` to "preserve Windows
+        backslashes", but that approach silently dropped colons-in-values,
+        couldn't read lists (``context_files``), and couldn't read nested
+        dicts (``validation_context``). PyYAML handles all of these — including
+        unquoted Windows paths like ``C:\\Users\\X\\file.md``, since the
+        backslash only has escape semantics inside double-quoted YAML strings.
+        """
+        try:
+            loaded = yaml.safe_load(yaml_str)
+        except yaml.YAMLError:
+            return {}
+        # safe_load returns None for empty input and may return non-dict
+        # for malformed frontmatter (e.g. a bare scalar). Coerce to {}.
+        if not isinstance(loaded, dict):
+            return {}
+        return loaded
 
     def _get_task_logs(self, task_id: str) -> List[Dict[str, str]]:
         """Get all log entries for a specific task."""
@@ -546,11 +537,10 @@ class TaskMonitor:
             
             frontmatter = parts[1].strip()
             body = parts[2].strip()
-            
-            # Parse frontmatter
-            metadata = self._parse_yaml_frontmatter(frontmatter)
-            
-            # Update status in frontmatter
+
+            # Update status in frontmatter (line-level replace preserves all
+            # other fields exactly — the same approach mark_processing uses
+            # in task_io.py for the N2 regression).
             lines = frontmatter.split("\n")
             new_lines = []
             for line in lines:
@@ -597,10 +587,8 @@ class TaskMonitor:
             frontmatter = parts[1].strip()
             body = parts[2].strip()
 
-            # Parse frontmatter
-            metadata = self._parse_yaml_frontmatter(frontmatter)
-
-            # Update status in frontmatter
+            # Update status in frontmatter (line-level replace preserves all
+            # other fields exactly).
             lines = frontmatter.split("\n")
             new_lines = []
             for line in lines:
