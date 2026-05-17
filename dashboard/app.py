@@ -428,6 +428,7 @@ def chat():
         body = request.get_json() or {}
         user_message = body.get("message", "").strip()
         session_id = body.get("session_id")
+        client_timestamp = body.get("timestamp", "").strip()  # ISO string from browser
 
         if not user_message:
             return jsonify({"error": "message is required"}), 400
@@ -438,10 +439,14 @@ def chat():
 
         history = chat_session_store.get_history(session_id)
 
-        # Build system prompt
+        # Build system prompt — inject current server datetime
         base_snapshot = build_base_snapshot(PROJECT_ROOT)
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        system_prompt = CHAT_SYSTEM_PROMPT_TEMPLATE.replace("{PIPELINE_SNAPSHOT}", base_snapshot).replace("{TODAY}", today)
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        system_prompt = CHAT_SYSTEM_PROMPT_TEMPLATE.replace("{PIPELINE_SNAPSHOT}", base_snapshot).replace("{NOW}", now_str)
+
+        # Prefix user message with timestamp for history (so the LLM can see timing)
+        ts_label = client_timestamp if client_timestamp else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        stamped_user_message = f"[{ts_label}] {user_message}"
 
         # Check if message mentions a task ID and inject deep context
         task_id = extract_task_id(user_message)
@@ -449,13 +454,13 @@ def chat():
             deep_context = get_deep_task_context(task_id, PROJECT_ROOT)
             system_prompt = system_prompt.replace("{PIPELINE_SNAPSHOT}", f"{base_snapshot}{deep_context}")
 
-        # Call LLM with tools
+        # Call LLM with tools — pass the timestamped message so the model sees timing
         try:
             reply = call_chat_with_tools(
                 model=CHAT_MODEL,
                 system_prompt=system_prompt,
                 history=history,
-                user_message=user_message,
+                user_message=stamped_user_message,
                 max_tool_turns=CHAT_MAX_TOOL_TURNS,
             )
         except OllamaError as e:
@@ -494,8 +499,8 @@ def chat():
             except (json.JSONDecodeError, Exception):
                 pass
 
-        # Append to history
-        chat_session_store.append(session_id, "user", user_message)
+        # Append to history — store the timestamped version so future turns also see timing
+        chat_session_store.append(session_id, "user", stamped_user_message)
         chat_session_store.append(session_id, "assistant", reply)
 
         result = {

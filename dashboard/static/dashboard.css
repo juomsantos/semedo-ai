@@ -1347,6 +1347,8 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: var(--r-lg);
   font-size: 13px;
   line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-msg.user .chat-bubble {
@@ -1363,7 +1365,37 @@ a { color: var(--accent); text-decoration: none; }
   border-bottom-left-radius: var(--r-sm);
 }
 
+.chat-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .chat-time { font-size: 10.5px; color: var(--text-muted); }
+
+.chat-bubble-error {
+  background: var(--bg-elevated);
+  border: 1px solid var(--danger, #f87171);
+  color: var(--danger, #f87171);
+  border-radius: var(--r-lg);
+  border-bottom-left-radius: var(--r-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-task-badge {
+  align-self: flex-start;
+  background: var(--success-muted, color-mix(in srgb, #4ade80 15%, transparent));
+  border: 1px solid var(--success-border, #4ade80);
+  color: var(--success, #4ade80);
+  border-radius: var(--r-lg);
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
 
 .chat-textarea, .chat-input {
   flex: 1;

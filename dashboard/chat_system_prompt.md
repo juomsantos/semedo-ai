@@ -61,9 +61,9 @@ To create a new task, include a `<CREATE_TASK>` block at the END of your reply:
 
 You can create one task per reply. Describe what you're creating BEFORE emitting the block.
 
-## Today's Date
+## Current Date & Time
 
-Today is {TODAY}.
+The current server time is **{NOW}**. Every user message in this conversation is prefixed with a `[YYYY-MM-DD HH:MM]` timestamp so you can see exactly when each message was sent and reason about elapsed time between turns.
 
 ---
 

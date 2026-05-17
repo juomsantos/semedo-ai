@@ -1347,11 +1347,15 @@ function sendChatMessage() {
     appendChatBubble('user', message);
     input.value = '';
 
-    // Call API
+    // Call API — include browser timestamp so the LLM knows when this message was sent
+    const now = new Date();
+    const isoTs = now.toISOString().slice(0, 16).replace('T', ' ') + ' ' +
+        Intl.DateTimeFormat().resolvedOptions().timeZone;
+
     fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, session_id: chatSessionId }),
+        body: JSON.stringify({ message, session_id: chatSessionId, timestamp: isoTs }),
     })
     .then(resp => {
         if (!resp.ok) {
@@ -1382,15 +1386,31 @@ function sendChatMessage() {
 
 function appendChatBubble(role, content) {
     const container = document.getElementById('chat-messages');
+
+    // Wrapper: .chat-msg.user / .chat-msg.assistant / .chat-msg.error
+    const msgRole = role === 'error' ? 'assistant' : role;
+    const msg = document.createElement('div');
+    msg.className = `chat-msg ${msgRole}`;
+
+    // Label above the bubble
+    const label = document.createElement('span');
+    label.className = 'chat-label';
+    label.textContent = role === 'user' ? 'You' : 'LLM';
+
+    // Bubble
     const bubble = document.createElement('div');
-    bubble.className = `chat-bubble chat-bubble-${role}`;
+    bubble.className = role === 'error' ? 'chat-bubble chat-bubble-error' : 'chat-bubble';
+    bubble.textContent = content;
 
-    const text = document.createElement('div');
-    text.className = 'chat-bubble-text';
-    text.textContent = content;
+    // Timestamp
+    const time = document.createElement('span');
+    time.className = 'chat-time';
+    time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    bubble.appendChild(text);
-    container.appendChild(bubble);
+    msg.appendChild(label);
+    msg.appendChild(bubble);
+    msg.appendChild(time);
+    container.appendChild(msg);
 
     // Scroll to bottom
     container.scrollTop = container.scrollHeight;
