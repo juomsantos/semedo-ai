@@ -65,6 +65,8 @@ A three-tier multi-agent system with a shared knowledge base:
 - **Config** centralized in `config.json`; loaded via `scripts/shared/config.py` (`ProjectConfig` class); Ollama timeout is `360s`. Each agent also has a `process_timeout` (scheduler-level kill ceiling): orchestrator 600s, coder 600s, research 1800s, qa 1200s, claude-code 600s. `process_timeout` must exceed `ollama_timeout × max_tool_turns` to avoid killing an agent mid-loop.
 - **Dashboard** is a separate Flask process (`dashboard/app.py`); reads directly from the shared filesystem — no DB required; tasks can be submitted from the **Submit Task** tab; results browsable by agent in the **Results** tab
 - **Log timestamps** use `datetime.fromtimestamp(time.time(), tz=timezone.utc)` — correct UTC on Windows
+- **Test suite** lives under `tests/` (pytest). Run with `pytest` after `pip install -r requirements-dev.txt`. The `fake_project` fixture in `tests/conftest.py` builds a temp pipeline tree and monkey-patches `PROJECT_ROOT` in `shared.task_io`, `shared.token_logger`, and (per-test) `agent_orchestrator`, so tests never touch the real `inbox/`/`outbox/`. Network is mocked in `test_rag_tool.py` (`requests`) and `test_ollama_client.py` (`_ollama.Client`). Current coverage on `scripts/shared/` is ~82% weighted (config/rag_tool/token_logger 100%, logger 97%, ollama_client 94%, task_io 91%); `file_watcher.py` and `web_search.py` are deferred. The orchestrator's pure helpers (`_find_qa_for_output`, `_find_retry_coder_output`, `_find_qa_for_coder_subtask`, `_extract_qa_verdict`) are covered; LLM-driven paths (decomposition, validation, recovery) need full Ollama mocking and are out of scope for the initial suite. See `ARCHITECTURE.md → Testing` for fixtures and conventions when adding new tests.
+- **Module-level logger in `agent_orchestrator.py`:** the `_find_*` helpers are not passed an `AgentLogger`, so they use `_module_log = logging.getLogger(__name__)` (defined at top of file) for `log.debug()` calls inside narrowed `except` blocks. Calling `log.<level>` (without `_module_log`) inside these helpers will `NameError` — `log` only exists as a local in `main()`.
 
 ## Folder Structure
 
@@ -76,6 +78,17 @@ AI Team/
   config.json                            ← centralized config (includes rag_api.url)
   RUN_SCHEDULER.bat / RUN_SCHEDULER.sh   ← quick-start scripts
   requirements.txt
+  requirements-dev.txt     ← pytest, pytest-cov
+  pytest.ini               ← pytest config (testpaths=tests)
+  tests/                   ← pytest suite — see ARCHITECTURE.md → Testing
+    conftest.py            ← fake_project fixture (re-points PROJECT_ROOT)
+    test_task_io.py        ← frontmatter, mark_processing, safe_read_context
+    test_rag_tool.py       ← graceful-degradation matrix
+    test_config.py         ← ProjectConfig accessors + JSON loader
+    test_logger.py         ← AgentLogger levels, UTF-8, append
+    test_token_logger.py   ← tokens.jsonl, task-ID filter
+    test_ollama_client.py  ← chat()/chat_with_tools() with mocked Ollama
+    test_orchestrator_helpers.py ← QA chain discovery, verdict extraction
   inbox/                   ← drop .task.md files here to submit work
   processing/              ← parent tasks held during validation loop (+ orchestrator.lock)
   validation/              ← completed subtasks awaiting orchestrator approval
