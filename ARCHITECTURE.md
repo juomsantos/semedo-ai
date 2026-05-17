@@ -154,6 +154,7 @@ AI Team/
     test_task_io.py            ← frontmatter round-trip, mark_processing, safe_read_context
     test_rag_tool.py           ← RAG tool graceful-degradation matrix
     test_rag_injection.py      ← pre-prompt RAG injection helper (M2)
+    test_agent_error_handling.py ← static AST checks for M3 patterns across all 5 agents
     test_config.py             ← ProjectConfig accessors, JSON loader
     test_logger.py             ← AgentLogger level routing, UTF-8 handling
     test_token_logger.py       ← tokens.jsonl output, task-ID format filter
@@ -617,6 +618,7 @@ filterwarnings = ignore::DeprecationWarning:frontmatter
 | `test_task_io.py` | `shared/task_io.py` | frontmatter round-trip, `mark_processing` field preservation (N2 regression), `safe_read_context` path-traversal defense, dependency wiring, parent grouping, Windows path handling |
 | `test_rag_tool.py` | `shared/rag_tool.py` | every failure mode returns a string (ConnectionError, HTTPError, JSON decode error, timeout, empty results) — no exception ever propagates to the agent tool loop |
 | `test_rag_injection.py` | `shared/rag_injection.py` | useful results prepended with `## Knowledge Base Context`; "Knowledge base unavailable / error / No results found" prefixes filtered out so the body is returned unchanged; query truncated to 500 chars; empty body bypasses the RAG call entirely |
+| `test_agent_error_handling.py` | all `scripts/agent_*.py` | static AST checks lock in the M3 patterns: every Ollama-using agent calls `client.is_available()` + `sys.exit(1)` in `main()`; every agent has `except OllamaError` (workers/orchestrator) or `claude --version` (claude-code); every `main()` task loop has the outer `except Exception` guard; QA's empty-response retry block is still present |
 | `test_config.py` | `shared/config.py` | every `ProjectConfig` accessor, default fallbacks, `load_config` (missing file, invalid JSON, default path) |
 | `test_logger.py` | `shared/logger.py` | level routing (INFO/WARN/ERROR/DEBUG), UTC ISO timestamps, file append, UTF-8 characters |
 | `test_token_logger.py` | `shared/token_logger.py` | JSONL output, task-ID regex filter rejects test/dev IDs, agent dir creation |
