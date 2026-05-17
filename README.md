@@ -266,4 +266,4 @@ Confirm `web_search.ollama_api_key` is set in `config.json`. Agents continue to 
 
 ## Licence
 
-MIT
+GNU General Public License v3.0
