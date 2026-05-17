@@ -275,6 +275,7 @@ What's covered today:
 |---|---|---|
 | `shared/config.py` | accessors + JSON loader | 100% |
 | `shared/rag_tool.py` | every failure mode → still returns a string | 100% |
+| `shared/rag_injection.py` | pre-prompt RAG injection (filter + truncate) | 100% |
 | `shared/token_logger.py` | JSONL output, task-ID filter | 100% |
 | `shared/logger.py` | `AgentLogger` level routing, UTF-8 | 97% |
 | `shared/ollama_client.py` | `chat`, `chat_with_tools`, error mapping (network mocked) | 94% |

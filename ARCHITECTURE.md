@@ -153,6 +153,7 @@ AI Team/
     conftest.py                ← shared fixtures: fake_project, sample_task_meta
     test_task_io.py            ← frontmatter round-trip, mark_processing, safe_read_context
     test_rag_tool.py           ← RAG tool graceful-degradation matrix
+    test_rag_injection.py      ← pre-prompt RAG injection helper (M2)
     test_config.py             ← ProjectConfig accessors, JSON loader
     test_logger.py             ← AgentLogger level routing, UTF-8 handling
     test_token_logger.py       ← tokens.jsonl output, task-ID format filter
@@ -167,6 +168,7 @@ AI Team/
       token_logger.py          ← appends {ts, task_id, prompt, completion} to logs/<agent>/tokens.jsonl
       web_search.py            ← web_search() and web_fetch() wrappers (ollama Python library)
       rag_tool.py              ← rag_query(query, top_k) → str; POST /query to RAG API; graceful fallback
+      rag_injection.py         ← inject_rag_context() — pre-prompt RAG for agents without a tool loop (coder, orchestrator)
       file_watcher.py          ← TaskWatcher: watchdog-based file event monitoring for immediate triggering
       logger.py                ← file + stdout logging, UTC timestamps
       config.py                ← config.json loader (ProjectConfig class, includes rag_api_url())
@@ -613,6 +615,7 @@ filterwarnings = ignore::DeprecationWarning:frontmatter
 |---|---|---|
 | `test_task_io.py` | `shared/task_io.py` | frontmatter round-trip, `mark_processing` field preservation (N2 regression), `safe_read_context` path-traversal defense, dependency wiring, parent grouping, Windows path handling |
 | `test_rag_tool.py` | `shared/rag_tool.py` | every failure mode returns a string (ConnectionError, HTTPError, JSON decode error, timeout, empty results) — no exception ever propagates to the agent tool loop |
+| `test_rag_injection.py` | `shared/rag_injection.py` | useful results prepended with `## Knowledge Base Context`; "Knowledge base unavailable / error / No results found" prefixes filtered out so the body is returned unchanged; query truncated to 500 chars; empty body bypasses the RAG call entirely |
 | `test_config.py` | `shared/config.py` | every `ProjectConfig` accessor, default fallbacks, `load_config` (missing file, invalid JSON, default path) |
 | `test_logger.py` | `shared/logger.py` | level routing (INFO/WARN/ERROR/DEBUG), UTC ISO timestamps, file append, UTF-8 characters |
 | `test_token_logger.py` | `shared/token_logger.py` | JSONL output, task-ID regex filter rejects test/dev IDs, agent dir creation |
