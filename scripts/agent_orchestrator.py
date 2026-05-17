@@ -29,10 +29,16 @@ import json
 import os
 import time
 import atexit
+import logging
 from pathlib import Path
 
 # Allow importing from shared/ regardless of cwd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Module-level logger for helper functions that aren't passed the per-task
+# AgentLogger. Uses Python's stdlib `logging` so output goes to stderr by default
+# but can be wired into the agent's log file if/when needed.
+_module_log = logging.getLogger(__name__)
 
 from shared.task_io import (
     list_pending_tasks,
@@ -289,7 +295,7 @@ def _find_qa_for_output(output_path: str):
                        for cf in task["meta"].get("context_files", [])):
                     return "pending", task
             except (OSError, ValueError, UnicodeDecodeError) as e:
-                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
+                _module_log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     for folder in done_dirs:
@@ -304,7 +310,7 @@ def _find_qa_for_output(output_path: str):
                        for cf in task["meta"].get("context_files", [])):
                     return "done", task
             except (OSError, ValueError, UnicodeDecodeError) as e:
-                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
+                _module_log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     return "not_found", None
@@ -381,7 +387,7 @@ def _find_retry_coder_output(qa_task: dict):
                 if _matches(task):
                     return None  # Still running — not ready
             except (OSError, ValueError, UnicodeDecodeError) as e:
-                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
+                _module_log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     # Check done dirs
@@ -397,7 +403,7 @@ def _find_retry_coder_output(qa_task: dict):
                 if output_path and Path(output_path).exists():
                     return output_path
             except (OSError, ValueError, UnicodeDecodeError) as e:
-                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
+                _module_log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     # Check failed/ — retry coder crashed or timed out; chain is exhausted
@@ -410,7 +416,7 @@ def _find_retry_coder_output(qa_task: dict):
                 if _matches(task):
                     return _RETRY_CODER_FAILED
             except (OSError, ValueError, UnicodeDecodeError) as e:
-                log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
+                _module_log.debug(f"Skipping unreadable task file {task_file.name}: {type(e).__name__}: {e}")
                 continue
 
     return None

@@ -149,6 +149,17 @@ AI Team/
     chat_session.py            ← in-memory UUID-keyed session store; max 20 history turns per session
     chat_system_prompt.md      ← chat system prompt template ({PIPELINE_SNAPSHOT}, {TODAY})
   logs/                        ← per-agent execution traces at logs/<agent>/general.log
+  tests/                       ← pytest unit-test suite (see Testing section)
+    conftest.py                ← shared fixtures: fake_project, sample_task_meta
+    test_task_io.py            ← frontmatter round-trip, mark_processing, safe_read_context
+    test_rag_tool.py           ← RAG tool graceful-degradation matrix
+    test_config.py             ← ProjectConfig accessors, JSON loader
+    test_logger.py             ← AgentLogger level routing, UTF-8 handling
+    test_token_logger.py       ← tokens.jsonl output, task-ID format filter
+    test_ollama_client.py      ← chat() and chat_with_tools() with mocked Ollama
+    test_orchestrator_helpers.py ← QA chain discovery and verdict extraction
+  pytest.ini                   ← pytest config (testpaths, addopts, filterwarnings)
+  requirements-dev.txt         ← pytest, pytest-cov
   scripts/
     shared/
       task_io.py               ← task file I/O: read/write/move, dependency resolution, validation grouping
@@ -568,6 +579,82 @@ After every successful Ollama call, each agent appends token usage to `logs/<age
 ```
 
 The log is append-only and accumulates across all runs. The dashboard **Agent Stats** tab reads these files and displays cumulative `Prompt Tokens`, `Completion Tokens`, and `LLM Calls` per agent. The `claude-code` worker always shows `—` (no Ollama calls).
+
+---
+
+## Testing
+
+The project ships a `pytest` suite under `tests/`. Every test is hermetic — no
+network calls, no real filesystem writes outside `tmp_path`, no dependency on a
+running Ollama server or RAG API.
+
+### Running
+
+```bash
+pip install -r requirements-dev.txt
+pytest                                              # all tests (≈130, <2s)
+pytest --cov=shared --cov=agent_orchestrator        # with coverage
+pytest -k safe_read_context                         # filter by name
+```
+
+Configuration lives in `pytest.ini` at the repo root:
+
+```ini
+[pytest]
+testpaths = tests
+python_files = test_*.py
+addopts = -ra --strict-markers --tb=short
+filterwarnings = ignore::DeprecationWarning:frontmatter
+```
+
+### Test layout
+
+| File | Module under test | Notable tests |
+|---|---|---|
+| `test_task_io.py` | `shared/task_io.py` | frontmatter round-trip, `mark_processing` field preservation (N2 regression), `safe_read_context` path-traversal defense, dependency wiring, parent grouping, Windows path handling |
+| `test_rag_tool.py` | `shared/rag_tool.py` | every failure mode returns a string (ConnectionError, HTTPError, JSON decode error, timeout, empty results) — no exception ever propagates to the agent tool loop |
+| `test_config.py` | `shared/config.py` | every `ProjectConfig` accessor, default fallbacks, `load_config` (missing file, invalid JSON, default path) |
+| `test_logger.py` | `shared/logger.py` | level routing (INFO/WARN/ERROR/DEBUG), UTC ISO timestamps, file append, UTF-8 characters |
+| `test_token_logger.py` | `shared/token_logger.py` | JSONL output, task-ID regex filter rejects test/dev IDs, agent dir creation |
+| `test_ollama_client.py` | `shared/ollama_client.py` | `chat()` + `chat_with_tools()` with the inner `_ollama.Client` mocked; error mapping (`ResponseError`, connection-error message → "Cannot connect", timeout → "timed out"); tool-call argument decoding (dict, JSON string, malformed) |
+| `test_orchestrator_helpers.py` | `agent_orchestrator.py` | `_find_qa_for_output` across in-flight + done dirs; `_find_retry_coder_output` timestamp guard and failed-sentinel; `_extract_qa_verdict` PASS/FAIL/UNKNOWN paths |
+
+### Fixtures (`tests/conftest.py`)
+
+- **`fake_project`** — builds a complete temp project tree under `tmp_path`
+  (`inbox/`, `processing/`, `validation/`, `outbox/`, `failed/`, `context/`,
+  `logs/`, `agents/<name>/inbox/`, etc.) and monkey-patches `PROJECT_ROOT` in
+  every module that captured it (`shared.task_io`, `shared.token_logger`,
+  and — via the `orchestrator` fixture — `agent_orchestrator`). Tests never
+  write into the real pipeline folders.
+- **`sample_task_meta`** — a minimal valid frontmatter dict to seed task files.
+- **`orchestrator`** (in `test_orchestrator_helpers.py`) — imports
+  `agent_orchestrator` and re-points its captured `PROJECT_ROOT`, so the
+  helpers traverse the fake tree.
+- **`client`** (in `test_ollama_client.py`) — an `OllamaClient` with the inner
+  `_ollama.Client` replaced by a `MagicMock`.
+
+### Conventions for adding tests
+
+- Test files live in `tests/test_<module>.py`. Use `pytest` plain-function
+  style (no `unittest.TestCase`).
+- Anything that touches the pipeline folders must use the `fake_project`
+  fixture — never assume the real `outbox/` exists or is writable.
+- Anything that calls Ollama, the RAG API, or `requests` must mock the
+  network. See `test_rag_tool.py` for `requests` mocking and
+  `test_ollama_client.py` for `_ollama.Client` mocking.
+- Each test states an explicit assertion — no "smoke" tests that only check
+  "doesn't raise."
+
+### Coverage today
+
+`scripts/shared/` modules are ≈82% covered weighted (config / rag_tool /
+token_logger 100%, logger 97%, ollama_client 94%, task_io 91%).
+`file_watcher.py` and `web_search.py` are deferred because they wrap the
+watchdog and ollama libraries respectively — they need targeted mocking that
+hasn't been written yet. The orchestrator is 17% covered (pure helpers
+only); decomposition, validation, and the recovery passes need full LLM
+mocking and are tracked in the post-audit refactor plan.
 
 ---
 
