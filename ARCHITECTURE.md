@@ -514,4 +514,17 @@ REST endpoints:
 | `POST /api/pending-approvals/<id>/approve` | Move task to `agents/claude-code/inbox/` |
 | `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
 | `POST /api/tasks/submit` | Create a task in `inbox/` directly from the dashboard |
-| `POST /api/clear-cache` | Delete
+| `POST /api/clear-cache` | Delete all task files, logs, and token counters (full reset) |
+| `POST /api/chat` | Chat with the pipeline assistant; optionally creates tasks via `<CREATE_TASK>` blocks |
+| `POST /api/chat/clear` | Clear conversation history for a session |
+| `GET /api/rag/status` | RAG API liveness (proxies `/health`) |
+| `GET /api/rag/documents` | List all documents in the knowledge base |
+| `POST /api/rag/ingest` | Add a document to the knowledge base |
+| `DELETE /api/rag/documents/<id>` | Remove a document from the knowledge base |
+
+See `DASHBOARD.md` for full API docs, configuration, and troubleshooting.
+
+## Diagrams
+
+- `ai-team-architecture.drawio` — System topology
+- `ai-team-message-flows.drawio` — Message flow and QA loop

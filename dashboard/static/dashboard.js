@@ -27,14 +27,15 @@ function setupEventListeners() {
         });
     });
 
-    // Chat input - Ctrl+Enter to send
+    // Chat input - Enter to send, Shift+Enter for line break
     const chatInput = document.getElementById('chat-input');
     if (chatInput) {
         chatInput.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendChatMessage();
             }
+            // Shift+Enter falls through to default textarea behaviour (line break)
         });
     }
 

@@ -385,4 +385,119 @@ Clear conversation history for a session.
 ### POST /api/clear-cache
 Delete all task files, agent logs, and token counters. Full system reset.
 
-**Response (200):** `{
+**Response (200):** `{"status": "success"}`
+
+**Error (500):** `{"status": "error", "message": "..."}`
+
+Clears all `.task.md`, `*_result.md`, and `*_qa_failure.md` files from `inbox/`, `processing/`, `validation/`, `outbox/`, `failed/`, and all worker inboxes. Also deletes `logs/<agent>/general.log` and `logs/<agent>/tokens.jsonl` for every agent.
+
+### GET /api/agents/:agent/logs
+Recent logs for a specific agent.
+
+**Query Parameters:**
+- `lines` (int, default 50): Number of log lines to return
+
+**Response:**
+```json
+{
+  "agent": "coder",
+  "logs": [
+    "[2026-05-06T11:00:01Z] [INFO] [coder] Starting agent_coder.py",
+    "[2026-05-06T11:00:02Z] [INFO] [coder] Found 1 task(s)",
+    ...
+  ]
+}
+```
+
+## Real-time Updates
+
+Dashboard polls all endpoints every **1.5 seconds** for real-time updates:
+- System metrics refresh
+- Task list updates (tasks move between states)
+- Agent stats updated
+- Log files monitored for new entries
+
+Poll interval can be configured in `config.json` (`dashboard.poll_interval` in milliseconds).
+
+Note: the scheduler uses a file watcher to trigger agents immediately when tasks arrive, so tasks submitted via the dashboard are typically picked up by the orchestrator in under 1 second — well before the dashboard's next poll cycle.
+
+## Data Source
+
+Dashboard reads directly from the file system:
+- Task files: `inbox/`, `processing/`, `validation/`, `outbox/`, `failed/`, `agents/*/inbox/`, `agents/claude-code/pending/`
+- Logs: `logs/<agent>/general.log`
+- Results: `outbox/*_result.md`, `failed/*_result.md`
+
+No database or special files needed. Same data source as the agents themselves.
+
+## Browser Compatibility
+
+Works on all modern browsers:
+- Chrome/Chromium 90+
+- Firefox 88+
+- Safari 14+
+- Edge 90+
+
+Responsive design works on desktop and tablet (mobile is supported but crowded).
+
+## Running Alongside Scheduler
+
+Dashboard and scheduler can run independently:
+
+**Terminal 1 - Scheduler:**
+```bash
+python scripts/scheduler.py
+```
+
+**Terminal 2 - Dashboard:**
+```bash
+python dashboard/run_dashboard.py
+```
+
+Or run in background:
+```bash
+# Windows
+start python dashboard/run_dashboard.py
+
+# Linux/Mac
+python dashboard/run_dashboard.py &
+```
+
+## Troubleshooting
+
+### "Cannot connect to dashboard"
+- Check port 5000 is not in use: `netstat -an | grep 5000` (or `netstat -ano` on Windows)
+- Try different port: `python dashboard/run_dashboard.py --port 8000`
+
+### "No tasks showing"
+- Check that `inbox/`, `processing/`, etc folders exist
+- Check that tasks are being created (add a test task)
+- Check logs in `logs/` directory
+
+### "Logs not updating"
+- Verify log files exist: `logs/<agent>/general.log`
+- Check file permissions
+- Wait 1-2 seconds for refresh
+
+### High CPU usage
+- Dashboard poll interval is 1.5 seconds (reasonable)
+- If still high, increase in `config.json`: `"poll_interval": 3000`
+
+## Development
+
+Dashboard code:
+- `dashboard/app.py` - Flask REST API server (includes chat, RAG proxy, and approval endpoints)
+- `dashboard/task_monitor.py` - File system scanner
+- `dashboard/run_dashboard.py` - Launcher script
+- `dashboard/templates/index.html` - UI HTML
+- `dashboard/static/dashboard.js` - Real-time polling and UI logic
+- `dashboard/static/dashboard.css` - Styling
+- `dashboard/agent_chat.py` - Chat LLM tool-calling loop (rag_query, web_search, web_fetch; max 8 tool turns)
+- `dashboard/chat_context.py` - Pipeline snapshot builder and deep-task-context injector
+- `dashboard/chat_session.py` - In-memory session store (UUID-keyed, max 20 history turns)
+- `dashboard/chat_system_prompt.md` - Chat assistant system prompt template (injected with live pipeline state)
+
+To modify:
+1. Edit source files
+2. Dashboard auto-reloads on change if run with `--debug`
+3. Restart to apply changes (no debug mode)
