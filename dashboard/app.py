@@ -42,7 +42,13 @@ from shared.config import load_config as _load_config
 
 # Initialize Flask app
 app = Flask(__name__, template_folder="templates", static_folder="static")
-CORS(app)
+
+# CORS is restricted to loopback origins. The dashboard has no authentication
+# and exposes destructive state-changing endpoints (approve/reject/submit), so
+# allowing arbitrary origins would enable CSRF from any page the user visits
+# while the dashboard is open.
+_LOOPBACK_ORIGIN_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
+CORS(app, origins=_LOOPBACK_ORIGIN_RE, supports_credentials=True)
 
 # Initialize task monitor
 monitor = TaskMonitor(PROJECT_ROOT)
@@ -545,12 +551,19 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 
-def main(port: int = 5000, debug: bool = False):
-    """Run the Flask app."""
+def main(port: int = 5000, debug: bool = False, host: str = "127.0.0.1"):
+    """Run the Flask app.
+
+    `host` defaults to loopback only — the dashboard has no auth and exposes
+    destructive endpoints (approve/reject/submit), so it must not be reachable
+    from outside the local machine. If you really need LAN/remote access, put
+    the dashboard behind a reverse proxy with authentication and explicitly
+    pass `host="0.0.0.0"` (or a specific interface IP).
+    """
     print(f"\n{'='*60}")
     print("AI Team Dashboard — Starting")
     print(f"{'='*60}")
-    print(f"Dashboard available at: http://localhost:{port}")
+    print(f"Dashboard available at: http://{host}:{port}")
     print(f"API endpoints:")
     print(f"  GET /api/status          - System metrics")
     print(f"  GET /api/tasks           - All tasks")
@@ -565,7 +578,7 @@ def main(port: int = 5000, debug: bool = False):
     print(f"  POST /api/clear-cache    - Clear all cached data")
     print()
 
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug)
 
 
 if __name__ == "__main__":

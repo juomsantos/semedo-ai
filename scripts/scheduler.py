@@ -74,8 +74,11 @@ class AgentScheduler:
             else:
                 kwargs["start_new_session"] = True
 
+            # Bind to loopback only — the RAG API has no auth and exposing it on
+            # 0.0.0.0 lets anyone on the LAN poison the vector store or wipe ChromaDB.
+            # If remote access is ever needed, front this with a reverse proxy + auth.
             self._rag_process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
                 cwd=str(RAG_API_DIR),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

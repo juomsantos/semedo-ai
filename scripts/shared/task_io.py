@@ -29,6 +29,57 @@ def read_task(task_path):
     return {"meta": dict(post.metadata), "body": post.content, "path": path}
 
 
+def safe_read_context(cf, logger=None):
+    """
+    Safely read a context-file path supplied via a task's ``context_files`` field.
+
+    Returns the file contents as a string, or ``None`` if the path:
+      - is empty / unreadable;
+      - resolves to a location outside ``PROJECT_ROOT`` (path-traversal guard);
+      - does not exist.
+
+    Rejections are logged via ``logger`` when supplied so unexpected paths show up
+    in the agent log instead of being silently skipped.
+
+    This is the only sanctioned way for agents to materialize a ``context_files``
+    entry — task frontmatter is LLM- or user-supplied and must not be trusted.
+    """
+    if not cf:
+        return None
+    try:
+        cf_path = Path(cf).resolve()
+    except (OSError, ValueError) as e:
+        if logger:
+            logger.warning(f"Rejecting context file (invalid path): {cf!r} ({type(e).__name__}: {e})")
+        return None
+
+    project_root_resolved = PROJECT_ROOT.resolve()
+    try:
+        cf_path.relative_to(project_root_resolved)
+    except ValueError:
+        if logger:
+            logger.warning(
+                f"Rejecting context file outside project root: {cf!r} -> {cf_path}"
+            )
+        return None
+
+    if not cf_path.exists():
+        if logger:
+            logger.warning(f"Context file not found, skipping: {cf}")
+        return None
+    if not cf_path.is_file():
+        if logger:
+            logger.warning(f"Context file is not a regular file, skipping: {cf}")
+        return None
+
+    try:
+        return cf_path.read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError) as e:
+        if logger:
+            logger.warning(f"Could not read context file {cf}: {type(e).__name__}: {e}")
+        return None
+
+
 def write_result(output_path, content, meta=None):
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)

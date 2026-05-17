@@ -58,9 +58,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# CORS is intentionally restricted to loopback origins.
+# The RAG API is consumed by Python agents (server-side, no CORS check) and by
+# the Flask dashboard which proxies requests through its own backend — no browser
+# ever needs to call this API directly. Allowing arbitrary origins with credentials
+# would enable CSRF against /ingest and DELETE /documents/{id}.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost", "http://127.0.0.1"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

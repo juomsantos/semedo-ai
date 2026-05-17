@@ -30,6 +30,7 @@ from shared.task_io import (
     mark_processing,
     mark_awaiting_validation,
     mark_failed,
+    safe_read_context,
     PROJECT_ROOT,
 )
 from shared.logger import AgentLogger
@@ -88,9 +89,9 @@ def process_task(task: dict, log: AgentLogger):
     if context_files:
         context_parts = []
         for cf in context_files:
-            cf_path = Path(cf)
-            if cf_path.exists():
-                context_parts.append(f"### Context: {cf_path.name}\n\n{cf_path.read_text(encoding='utf-8')}")
+            content = safe_read_context(cf, logger=log)
+            if content is not None:
+                context_parts.append(f"### Context: {Path(cf).name}\n\n{content}")
         if context_parts:
             user_message = "\n\n".join(context_parts) + "\n\n---\n\n" + user_message
 
