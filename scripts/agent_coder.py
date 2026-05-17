@@ -124,8 +124,8 @@ def main():
     client = OllamaClient()
 
     if not client.is_available():
-        log.error("Ollama is not reachable — aborting")
-        import sys; sys.exit(1)
+        log.error(f"Ollama is not reachable at {client.base_url} — aborting")
+        sys.exit(1)
 
     tasks = list_pending_tasks(INBOX)
     if not tasks:
