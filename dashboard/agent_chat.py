@@ -52,8 +52,15 @@ def call_chat_with_tools(
     client = OllamaClient()
     tools = [rag_query, web_search, web_fetch]
 
-    # Build messages for this turn: history + new user message
-    messages = history + [{"role": "user", "content": user_message}]
+    # Build messages: system prompt + history + new user message.
+    # (system_prompt was previously accepted but silently dropped, so the
+    # model never saw the pipeline snapshot, tool guidance, or CREATE_TASK
+    # instructions — which is also why it rarely produced tool calls.)
+    messages: List[Dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
 
     for turn in range(max_tool_turns):
         # Call LLM with tools available
@@ -75,14 +82,12 @@ def call_chat_with_tools(
             continue
 
         if response.get("type") == "tool_call":
+            # chat_with_tools returns keys "name", "arguments", "raw_message".
+            # (Earlier this function read "tool_name"/"tool_input" — those keys
+            # don't exist, so every call fell through to the unknown-tool branch.)
             raw_message = response.get("raw_message")
-            tool_name = response.get("tool_name", "unknown")
-            tool_input = response.get("tool_input", {})
-
-            # Append raw message to messages (ensure it's a string)
-            if raw_message:
-                msg_content = str(raw_message) if not isinstance(raw_message, str) else raw_message
-                messages.append({"role": "assistant", "content": msg_content})
+            tool_name = response.get("name", "unknown")
+            tool_input = response.get("arguments", {}) or {}
 
             # Dispatch tool
             try:
@@ -97,10 +102,21 @@ def call_chat_with_tools(
             except Exception as e:
                 tool_result = f"Tool error: {str(e)}"
 
-            # Append tool result as a user message (simpler, compatible format)
+            # Append the assistant's tool call (use the library's native Message
+            # object when available so the schema round-trips correctly) and
+            # the tool result as a role:tool message — matches research/qa.
+            if raw_message is not None:
+                messages.append(raw_message)
+            else:
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": tool_name, "arguments": tool_input}}],
+                })
             messages.append({
-                "role": "user",
-                "content": f"[Tool result from {tool_name}: {tool_result}]"
+                "role": "tool",
+                "content": tool_result,
+                "tool_name": tool_name,
             })
             continue
 
