@@ -1378,6 +1378,51 @@ function escapeHtml(text) {
 
 let chatSessionId = null;
 
+function markdownToHtml(text) {
+    // Configure marked.js
+    marked.setOptions({
+        breaks: true,
+        gfm: true,
+    });
+
+    // Configure code highlighting with Highlight.js
+    const originalRenderer = marked.Renderer.prototype.code;
+    marked.Renderer.prototype.code = function(code, language) {
+        if (language && hljs.getLanguage(language)) {
+            try {
+                const highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
+                return `<pre><code class="language-${language} hljs">${highlighted}</code></pre>`;
+            } catch (e) {
+                // Fallback if highlighting fails
+                return `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
+            }
+        }
+        // No language specified or not recognized
+        return `<pre><code>${escapeHtml(code)}</code></pre>`;
+    };
+
+    // Parse markdown to HTML
+    let html = marked.parse(text);
+
+    // Sanitize HTML to prevent XSS, but allow formatting tags
+    const config = {
+        ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                       'ul', 'ol', 'li', 'blockquote', 'a', 'img', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'hr'],
+        ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'style'],
+        ALLOW_DATA_ATTR: false,
+    };
+
+    html = DOMPurify.sanitize(html, config);
+
+    return html;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const message = input.value.trim();
@@ -1445,7 +1490,13 @@ function appendChatBubble(role, content) {
     // Bubble
     const bubble = document.createElement('div');
     bubble.className = role === 'error' ? 'chat-bubble chat-bubble-error' : 'chat-bubble';
-    bubble.textContent = content;
+
+    // Render content: user messages as plain text, assistant/error as markdown
+    if (role === 'user') {
+        bubble.textContent = content;
+    } else {
+        bubble.innerHTML = markdownToHtml(content);
+    }
 
     // Timestamp
     const time = document.createElement('span');
