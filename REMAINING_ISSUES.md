@@ -2,7 +2,7 @@
 
 This document tracks audit findings from the original security & code-quality audit that have **not** yet been addressed. The Critical (Cn), High (Hn), and Major (Mn) items closed so far are listed at the bottom for context.
 
-Last updated: 2026-05-18 (after N3/N4/N5 cleanup).
+Last updated: 2026-05-18 (after N7 cleanup).
 
 ---
 
@@ -14,11 +14,11 @@ Last updated: 2026-05-18 (after N3/N4/N5 cleanup).
 - **Fix:** Cache the listing for the duration of one orchestrator cycle; invalidate on file-watcher events. Defer until performance actually matters.
 - **Effort:** ~1 hr (and only worth doing if a hot-spot shows up in profiling).
 
-### N7 — Dashboard endpoints collapse all errors to 500
+### N7 (partial — status codes) — Detailed error redaction still open
 
-- [dashboard/app.py](dashboard/app.py) — typical pattern: `except Exception as e: return jsonify({"error": str(e)}), 500`. Hides distinction between client errors (bad input → 400) and server errors (genuine bug → 500), and leaks internal error messages back to the browser.
-- **Fix:** Narrow the catches: `ValueError` → 400, `FileNotFoundError` → 404, everything else → 500 with a generic message + a UUID logged server-side that the user can quote in a bug report.
-- **Effort:** ~45 min.
+- The status-code half of N7 was closed (see closed table). The other half — replacing `str(e)` in error bodies with a generic message + a server-side UUID for log correlation — was intentionally deferred. Dashboard responses still leak internal error text to the browser. Acceptable while the dashboard stays loopback-only; revisit if it's ever exposed beyond `127.0.0.1`.
+- **Fix:** In `_json_error_envelope` (`dashboard/app.py`), replace `str(e)` with `f"Internal error ({uid})"` for the 500 branch and log `uid → traceback` server-side. Keep the 400/404/503 branches as-is so client-input errors still tell the user what went wrong.
+- **Effort:** ~30 min.
 
 ### N8 — `requirements.txt` uses `>=` only
 
@@ -74,3 +74,4 @@ For security-relevant changes (C1, N7), add a regression test under `tests/`. Fo
 | N3 | Narrowed 4 JSON-parse `except Exception` → `ValueError` in orchestrator. Audit confirmed remaining broad catches are intentional log-and-continue per CLAUDE.md error-handling pattern (3). | `1adb4f6` |
 | N4 | Obsolete — closed by refactor. The dashboard no longer has an approval-detail modal or `approvalsCache`; approvals render inline with all needed metadata. No new endpoint needed. | n/a |
 | N5 | `DEFAULT_CHAT_MODEL` / `DEFAULT_CHAT_TIMEOUT_S` / `DEFAULT_CHAT_MAX_TOOL_TURNS` / `DEFAULT_RAG_BASE_URL` hoisted to module-top in `dashboard/app.py`; used in both config-loaded and outer-fallback paths. | `1adb4f6` |
+| N7 (status codes) | `_json_error_envelope` decorator in `dashboard/app.py`: ValueError → 400, FileNotFoundError → 404, ConnectionError → 503, fallback → 500. Applied to 17 endpoints (skipping `clear_cache` and `rag_status` which have intentionally different response shapes). Error-message redaction still pending — see N7 partial entry. | (pending) |

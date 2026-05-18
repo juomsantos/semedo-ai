@@ -93,6 +93,36 @@ def require_dashboard_token(view):
 
     return wrapper
 
+
+def _json_error_envelope(view):
+    """Map common exception types to proper HTTP status codes.
+
+    ValueError → 400 (bad client input).
+    FileNotFoundError → 404 (missing resource — note: subclass of OSError, so
+      it must be listed before any OSError arm if one is added later).
+    requests.ConnectionError → 503 (upstream dependency down, e.g. RAG API).
+    Everything else → 500.
+
+    All branches preserve ``str(e)`` in the response body. See N7 in
+    REMAINING_ISSUES.md — the redaction step (UUID + server-side logging)
+    is intentionally deferred; for now the priority is fixing the codes.
+    """
+
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        try:
+            return view(*args, **kwargs)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except FileNotFoundError as e:
+            return jsonify({"error": str(e)}), 404
+        except _requests.exceptions.ConnectionError as e:
+            return jsonify({"error": str(e)}), 503
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    return wrapper
+
 # Initialize task monitor
 monitor = TaskMonitor(PROJECT_ROOT)
 
@@ -133,193 +163,171 @@ def index():
 
 
 @app.route("/api/status")
+@_json_error_envelope
 def get_status():
     """Get system status and metrics."""
-    try:
-        status = monitor.get_system_status()
-        return jsonify(status), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    status = monitor.get_system_status()
+    return jsonify(status), 200
 
 
 @app.route("/api/tasks")
+@_json_error_envelope
 def get_tasks():
     """Get all tasks with optional filtering."""
-    try:
-        limit = request.args.get("limit", 100, type=int)
-        status_filter = request.args.get("status", None)
-        task_type = request.args.get("type", None)
-        
-        tasks = monitor.get_all_tasks(limit=limit)
-        
-        # Apply filters
-        if status_filter:
-            tasks = [t for t in tasks if t["status"] == status_filter]
-        if task_type:
-            tasks = [t for t in tasks if t["type"] == task_type]
-        
-        return jsonify({"tasks": tasks, "count": len(tasks)}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    limit = request.args.get("limit", 100, type=int)
+    status_filter = request.args.get("status", None)
+    task_type = request.args.get("type", None)
+
+    tasks = monitor.get_all_tasks(limit=limit)
+
+    # Apply filters
+    if status_filter:
+        tasks = [t for t in tasks if t["status"] == status_filter]
+    if task_type:
+        tasks = [t for t in tasks if t["type"] == task_type]
+
+    return jsonify({"tasks": tasks, "count": len(tasks)}), 200
 
 
 @app.route("/api/tasks/<task_id>")
+@_json_error_envelope
 def get_task_detail(task_id):
     """Get complete task details including result and logs."""
-    try:
-        task = monitor.get_task_detail(task_id)
-        if not task:
-            return jsonify({"error": f"Task {task_id} not found"}), 404
+    task = monitor.get_task_detail(task_id)
+    if not task:
+        return jsonify({"error": f"Task {task_id} not found"}), 404
 
-        return jsonify(task), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify(task), 200
 
 
 @app.route("/api/tasks/<task_id>/payload")
+@_json_error_envelope
 def get_task_payload(task_id):
     """Get raw task file content."""
-    try:
-        payload = monitor.get_task_payload(task_id)
-        if not payload:
-            return jsonify({"error": f"Task {task_id} not found"}), 404
+    payload = monitor.get_task_payload(task_id)
+    if not payload:
+        return jsonify({"error": f"Task {task_id} not found"}), 404
 
-        return jsonify({"id": task_id, "content": payload}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"id": task_id, "content": payload}), 200
 
 
 @app.route("/api/agents")
+@_json_error_envelope
 def get_agents():
     """Get per-agent statistics."""
-    try:
-        stats = monitor.get_agent_stats()
-        return jsonify(stats), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    stats = monitor.get_agent_stats()
+    return jsonify(stats), 200
 
 
 @app.route("/api/agents/<agent>/logs")
+@_json_error_envelope
 def get_agent_logs(agent):
     """Get recent logs for a specific agent."""
-    try:
-        lines = request.args.get("lines", 50, type=int)
-        logs = monitor.get_agent_logs(agent, lines=lines)
-        return jsonify({"agent": agent, "logs": logs}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    lines = request.args.get("lines", 50, type=int)
+    logs = monitor.get_agent_logs(agent, lines=lines)
+    return jsonify({"agent": agent, "logs": logs}), 200
 
 
 @app.route("/api/pending-approvals")
+@_json_error_envelope
 def get_pending_approvals():
     """Get all tasks awaiting approval."""
-    try:
-        tasks = monitor.get_pending_approvals()
-        return jsonify({"tasks": tasks, "count": len(tasks)}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    tasks = monitor.get_pending_approvals()
+    return jsonify({"tasks": tasks, "count": len(tasks)}), 200
 
 
 @app.route("/api/pending-approvals/<task_id>/approve", methods=["POST"])
 @require_dashboard_token
+@_json_error_envelope
 def approve_task(task_id):
     """Approve a pending task."""
-    try:
-        success = monitor.approve_task(task_id)
-        if not success:
-            return jsonify({"error": f"Task {task_id} not found"}), 404
-        return jsonify({"status": "approved", "task_id": task_id}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    success = monitor.approve_task(task_id)
+    if not success:
+        return jsonify({"error": f"Task {task_id} not found"}), 404
+    return jsonify({"status": "approved", "task_id": task_id}), 200
 
 
 @app.route("/api/pending-approvals/<task_id>/reject", methods=["POST"])
 @require_dashboard_token
+@_json_error_envelope
 def reject_task(task_id):
     """Reject a pending task."""
-    try:
-        body = request.get_json() or {}
-        reason = body.get("reason", "Rejected by user")
-        success = monitor.reject_task(task_id, reason)
-        if not success:
-            return jsonify({"error": f"Task {task_id} not found"}), 404
-        return jsonify({"status": "rejected", "task_id": task_id}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    body = request.get_json() or {}
+    reason = body.get("reason", "Rejected by user")
+    success = monitor.reject_task(task_id, reason)
+    if not success:
+        return jsonify({"error": f"Task {task_id} not found"}), 404
+    return jsonify({"status": "rejected", "task_id": task_id}), 200
 
 
 @app.route("/api/results/<agent>")
+@_json_error_envelope
 def get_results(agent):
     """Get completed and failed results for a specific agent."""
-    try:
-        results = monitor.get_results_by_agent(agent)
-        return jsonify(results), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    results = monitor.get_results_by_agent(agent)
+    return jsonify(results), 200
 
 
 @app.route("/api/tasks/completed", methods=["GET"])
+@_json_error_envelope
 def get_completed_tasks():
     """Return completed parent tasks available as context files."""
-    try:
-        tasks = monitor.get_completed_parent_tasks(limit=100)
-        return jsonify(tasks), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    tasks = monitor.get_completed_parent_tasks(limit=100)
+    return jsonify(tasks), 200
 
 
 @app.route("/api/tasks/submit", methods=["POST"])
 @require_dashboard_token
+@_json_error_envelope
 def submit_task():
     """Submit a new task to the orchestrator."""
-    try:
-        body = request.get_json() or {}
+    body = request.get_json() or {}
 
-        # Validate required fields
-        description = body.get("description", "").strip()
-        if not description:
-            return jsonify({"error": "description is required"}), 400
+    # Validate required fields
+    description = body.get("description", "").strip()
+    if not description:
+        return jsonify({"error": "description is required"}), 400
 
-        task_type = body.get("type", "").strip()
-        valid_types = ["code", "research", "summarize", "review", "plan"]
-        if task_type not in valid_types:
-            return jsonify({"error": f"type must be one of: {', '.join(valid_types)}"}), 400
+    task_type = body.get("type", "").strip()
+    valid_types = ["code", "research", "summarize", "review", "plan"]
+    if task_type not in valid_types:
+        return jsonify({"error": f"type must be one of: {', '.join(valid_types)}"}), 400
 
-        priority = body.get("priority", "medium").strip()
-        valid_priorities = ["high", "medium", "low"]
-        if priority not in valid_priorities:
-            return jsonify({"error": f"priority must be one of: {', '.join(valid_priorities)}"}), 400
+    priority = body.get("priority", "medium").strip()
+    valid_priorities = ["high", "medium", "low"]
+    if priority not in valid_priorities:
+        return jsonify({"error": f"priority must be one of: {', '.join(valid_priorities)}"}), 400
 
-        expected_output = body.get("expected_output", "").strip()
-        if not expected_output:
-            expected_output = "See task description."
+    expected_output = body.get("expected_output", "").strip()
+    if not expected_output:
+        expected_output = "See task description."
 
-        # Extract and validate context_files
-        context_files = body.get("context_files", [])
-        if not isinstance(context_files, list):
-            context_files = []
-        # Strip whitespace and filter empty strings
-        context_files = [cf.strip() for cf in context_files if isinstance(cf, str) and cf.strip()]
+    # Extract and validate context_files
+    context_files = body.get("context_files", [])
+    if not isinstance(context_files, list):
+        context_files = []
+    # Strip whitespace and filter empty strings
+    context_files = [cf.strip() for cf in context_files if isinstance(cf, str) and cf.strip()]
 
-        # Create task file
-        inbox_path = PROJECT_ROOT / "inbox"
-        task_path = create_task_file(
-            inbox_path=inbox_path,
-            task_type=task_type,
-            description=description,
-            expected_output=expected_output,
-            priority=priority,
-            created_by="dashboard",
-            assigned_to="orchestrator",
-            context_files=context_files,
-        )
+    # Create task file. If create_task_file raises ValueError (e.g. a
+    # path-traversal attempt in context_files — see C3 hardening), the
+    # envelope decorator converts it to a 400 response.
+    inbox_path = PROJECT_ROOT / "inbox"
+    task_path = create_task_file(
+        inbox_path=inbox_path,
+        task_type=task_type,
+        description=description,
+        expected_output=expected_output,
+        priority=priority,
+        created_by="dashboard",
+        assigned_to="orchestrator",
+        context_files=context_files,
+    )
 
-        # Extract task ID from path (filename format: {task_id}.task.md)
-        task_id = task_path.stem.replace(".task", "")
+    # Extract task ID from path (filename format: {task_id}.task.md)
+    task_id = task_path.stem.replace(".task", "")
 
-        return jsonify({"task_id": task_id, "message": "Task submitted to orchestrator."}), 201
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"task_id": task_id, "message": "Task submitted to orchestrator."}), 201
 
 
 @app.route("/api/clear-cache", methods=["POST"])
@@ -380,6 +388,7 @@ def clear_cache():
 
 @app.route("/api/upload-context", methods=["POST"])
 @require_dashboard_token
+@_json_error_envelope
 def upload_context_files():
     """Upload one or more local files into context/ and return their Windows paths."""
     if "files" not in request.files:
@@ -431,42 +440,33 @@ def _rag_base_url() -> str:
 
 
 @app.route("/api/rag/documents", methods=["GET"])
+@_json_error_envelope
 def rag_list_documents():
-    """List all documents in the knowledge base."""
-    try:
-        resp = _requests.get(f"{_rag_base_url()}/documents", timeout=10)
-        return jsonify(resp.json()), resp.status_code
-    except _requests.exceptions.ConnectionError:
-        return jsonify({"error": "RAG API unavailable"}), 503
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """List all documents in the knowledge base.
+
+    ConnectionError → 503 mapping is provided by the envelope decorator.
+    """
+    resp = _requests.get(f"{_rag_base_url()}/documents", timeout=10)
+    return jsonify(resp.json()), resp.status_code
 
 
 @app.route("/api/rag/ingest", methods=["POST"])
 @require_dashboard_token
+@_json_error_envelope
 def rag_ingest():
     """Ingest a document into the knowledge base."""
-    try:
-        body = request.get_json() or {}
-        resp = _requests.post(f"{_rag_base_url()}/ingest", json=body, timeout=600)
-        return jsonify(resp.json()), resp.status_code
-    except _requests.exceptions.ConnectionError:
-        return jsonify({"error": "RAG API unavailable"}), 503
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    body = request.get_json() or {}
+    resp = _requests.post(f"{_rag_base_url()}/ingest", json=body, timeout=600)
+    return jsonify(resp.json()), resp.status_code
 
 
 @app.route("/api/rag/documents/<doc_id>", methods=["DELETE"])
 @require_dashboard_token
+@_json_error_envelope
 def rag_delete_document(doc_id):
     """Delete a document from the knowledge base."""
-    try:
-        resp = _requests.delete(f"{_rag_base_url()}/documents/{doc_id}", timeout=10)
-        return jsonify(resp.json()), resp.status_code
-    except _requests.exceptions.ConnectionError:
-        return jsonify({"error": "RAG API unavailable"}), 503
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    resp = _requests.delete(f"{_rag_base_url()}/documents/{doc_id}", timeout=10)
+    return jsonify(resp.json()), resp.status_code
 
 
 @app.route("/api/rag/status", methods=["GET"])
@@ -487,116 +487,112 @@ def rag_status():
 
 @app.route("/api/chat", methods=["POST"])
 @require_dashboard_token
+@_json_error_envelope
 def chat():
     """Chat endpoint with LLM and tools."""
+    body = request.get_json() or {}
+    user_message = body.get("message", "").strip()
+    session_id = body.get("session_id")
+    client_timestamp = body.get("timestamp", "").strip()  # ISO string from browser
+
+    if not user_message:
+        return jsonify({"error": "message is required"}), 400
+
+    # Create or retrieve session
+    if not session_id:
+        session_id = chat_session_store.new_session()
+
+    history = chat_session_store.get_history(session_id)
+
+    # Build system prompt — inject current server datetime
+    base_snapshot = build_base_snapshot(PROJECT_ROOT)
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    system_prompt = CHAT_SYSTEM_PROMPT_TEMPLATE.replace("{PIPELINE_SNAPSHOT}", base_snapshot).replace("{NOW}", now_str)
+
+    # Prefix user message with timestamp for history (so the LLM can see timing)
+    ts_label = client_timestamp if client_timestamp else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stamped_user_message = f"[{ts_label}] {user_message}"
+
+    # Check if message mentions a task ID and inject deep context
+    task_id = extract_task_id(user_message)
+    if task_id:
+        deep_context = get_deep_task_context(task_id, PROJECT_ROOT)
+        system_prompt = system_prompt.replace("{PIPELINE_SNAPSHOT}", f"{base_snapshot}{deep_context}")
+
+    # Call LLM with tools — pass the timestamped message so the model sees timing.
+    # OllamaError is mapped explicitly to 503 (upstream LLM unavailable) before
+    # the envelope decorator would otherwise turn it into a 500.
     try:
-        body = request.get_json() or {}
-        user_message = body.get("message", "").strip()
-        session_id = body.get("session_id")
-        client_timestamp = body.get("timestamp", "").strip()  # ISO string from browser
+        reply = call_chat_with_tools(
+            model=CHAT_MODEL,
+            system_prompt=system_prompt,
+            history=history,
+            user_message=stamped_user_message,
+            max_tool_turns=CHAT_MAX_TOOL_TURNS,
+        )
+    except OllamaError as e:
+        return jsonify({"error": f"LLM error: {str(e)}"}), 503
 
-        if not user_message:
-            return jsonify({"error": "message is required"}), 400
-
-        # Create or retrieve session
-        if not session_id:
-            session_id = chat_session_store.new_session()
-
-        history = chat_session_store.get_history(session_id)
-
-        # Build system prompt — inject current server datetime
-        base_snapshot = build_base_snapshot(PROJECT_ROOT)
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        system_prompt = CHAT_SYSTEM_PROMPT_TEMPLATE.replace("{PIPELINE_SNAPSHOT}", base_snapshot).replace("{NOW}", now_str)
-
-        # Prefix user message with timestamp for history (so the LLM can see timing)
-        ts_label = client_timestamp if client_timestamp else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        stamped_user_message = f"[{ts_label}] {user_message}"
-
-        # Check if message mentions a task ID and inject deep context
-        task_id = extract_task_id(user_message)
-        if task_id:
-            deep_context = get_deep_task_context(task_id, PROJECT_ROOT)
-            system_prompt = system_prompt.replace("{PIPELINE_SNAPSHOT}", f"{base_snapshot}{deep_context}")
-
-        # Call LLM with tools — pass the timestamped message so the model sees timing
+    # Parse CREATE_TASK block if present
+    action = None
+    task_match = re.search(r'<CREATE_TASK>\s*(\{[^}]+\})\s*</CREATE_TASK>', reply, re.DOTALL)
+    if task_match:
+        import json
         try:
-            reply = call_chat_with_tools(
-                model=CHAT_MODEL,
-                system_prompt=system_prompt,
-                history=history,
-                user_message=stamped_user_message,
-                max_tool_turns=CHAT_MAX_TOOL_TURNS,
-            )
-        except OllamaError as e:
-            return jsonify({"error": f"LLM error: {str(e)}"}), 503
+            task_data = json.loads(task_match.group(1))
+            # Create task
+            task_type = task_data.get("type", "code").strip()
+            priority = task_data.get("priority", "medium").strip()
+            description = task_data.get("description", "").strip()
+            expected_output = task_data.get("expected_output", "See task description.").strip()
 
-        # Parse CREATE_TASK block if present
-        action = None
-        task_match = re.search(r'<CREATE_TASK>\s*(\{[^}]+\})\s*</CREATE_TASK>', reply, re.DOTALL)
-        if task_match:
-            import json
-            try:
-                task_data = json.loads(task_match.group(1))
-                # Create task
-                task_type = task_data.get("type", "code").strip()
-                priority = task_data.get("priority", "medium").strip()
-                description = task_data.get("description", "").strip()
-                expected_output = task_data.get("expected_output", "See task description.").strip()
+            if description:
+                inbox_path = PROJECT_ROOT / "inbox"
+                task_path = create_task_file(
+                    inbox_path=inbox_path,
+                    task_type=task_type,
+                    description=description,
+                    expected_output=expected_output,
+                    priority=priority,
+                    created_by="chat",
+                    assigned_to="orchestrator",
+                    context_files=[],
+                )
+                new_task_id = task_path.stem.replace(".task", "")
+                action = {"type": "task_created", "task_id": new_task_id}
 
-                if description:
-                    inbox_path = PROJECT_ROOT / "inbox"
-                    task_path = create_task_file(
-                        inbox_path=inbox_path,
-                        task_type=task_type,
-                        description=description,
-                        expected_output=expected_output,
-                        priority=priority,
-                        created_by="chat",
-                        assigned_to="orchestrator",
-                        context_files=[],
-                    )
-                    new_task_id = task_path.stem.replace(".task", "")
-                    action = {"type": "task_created", "task_id": new_task_id}
+            # Strip the CREATE_TASK block from reply
+            reply = re.sub(r'<CREATE_TASK>.*?</CREATE_TASK>', '', reply, flags=re.DOTALL).strip()
+        except (json.JSONDecodeError, Exception):
+            pass
 
-                # Strip the CREATE_TASK block from reply
-                reply = re.sub(r'<CREATE_TASK>.*?</CREATE_TASK>', '', reply, flags=re.DOTALL).strip()
-            except (json.JSONDecodeError, Exception):
-                pass
+    # Append to history — store the timestamped version so future turns also see timing
+    chat_session_store.append(session_id, "user", stamped_user_message)
+    chat_session_store.append(session_id, "assistant", reply)
 
-        # Append to history — store the timestamped version so future turns also see timing
-        chat_session_store.append(session_id, "user", stamped_user_message)
-        chat_session_store.append(session_id, "assistant", reply)
+    result = {
+        "reply": reply,
+        "session_id": session_id,
+    }
+    if action:
+        result["action"] = action
 
-        result = {
-            "reply": reply,
-            "session_id": session_id,
-        }
-        if action:
-            result["action"] = action
-
-        return jsonify(result), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify(result), 200
 
 
 @app.route("/api/chat/clear", methods=["POST"])
 @require_dashboard_token
+@_json_error_envelope
 def clear_chat():
     """Clear chat history for a session."""
-    try:
-        body = request.get_json() or {}
-        session_id = body.get("session_id")
+    body = request.get_json() or {}
+    session_id = body.get("session_id")
 
-        if not session_id:
-            return jsonify({"error": "session_id is required"}), 400
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
 
-        chat_session_store.clear(session_id)
-        return jsonify({"status": "cleared"}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    chat_session_store.clear(session_id)
+    return jsonify({"status": "cleared"}), 200
 
 
 @app.errorhandler(404)
