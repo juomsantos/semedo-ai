@@ -81,7 +81,8 @@ cd ai-team
 
 **2. Install main dependencies**
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.lock    # reproducible install from the pinned lockfile
+# or: pip install -r requirements.txt
 ```
 
 **3. Install RAG API dependencies**
@@ -215,6 +216,8 @@ All settings are in `config.json` at the project root.
 | `web_search.ollama_api_key` | — | Ollama API key for web search |
 | `agents.<name>.model` | `qwen3.5:9b` | Model used by each agent |
 | `agents.<name>.process_timeout` | varies | Max runtime for the agent subprocess (seconds) |
+| `agents.<name>.options` | `{}` | Extra options passed verbatim to `ollama.Client.chat` (e.g. `temperature`, `num_ctx`) |
+| `agents.<name>.thinking` | `null` | Enable model reasoning/thinking mode (`true`/`false`/`null` for library default) |
 | `scheduler.enable_timer_polling` | `false` | Enable timer-based polling alongside the file watcher |
 | `dashboard.port` | `5000` | Dashboard port |
 | `rag_api.url` | `http://localhost:8000` | RAG API address |
@@ -280,7 +283,8 @@ What's covered today:
 | `shared/logger.py` | `AgentLogger` level routing, UTF-8 | 97% |
 | `shared/ollama_client.py` | `chat`, `chat_with_tools`, error mapping (network mocked) | 94% |
 | `shared/task_io.py` | frontmatter round-trip, `mark_processing`, `safe_read_context` traversal defense, dependency wiring | 91% |
-| `agent_orchestrator.py` | pure helpers: `_find_qa_for_output`, `_find_retry_coder_output`, `_find_qa_for_coder_subtask`, `_extract_qa_verdict` | partial (LLM-driven logic deferred) |
+| `shared/agent_boilerplate.py` | `build_user_message` per-style rendering, `load_system_prompt`, `log_tokens_safe` | ~100% |
+| `orchestration/` helpers | `_find_qa_for_output`, `_find_retry_coder_output`, `_find_qa_for_coder_subtask`, `_extract_qa_verdict` | partial (LLM-driven paths deferred) |
 | `dashboard/task_monitor.py` | frontmatter parser (Windows paths, lists, nested dicts, colons-in-values), `get_pending_approvals`, `approve_task`, `reject_task` | partial (full monitor surface deferred) |
 
 What's **not** covered yet: `file_watcher.py` (needs watchdog mocking),
@@ -298,7 +302,7 @@ work and conventions for adding new tests.
 **Agents don't start / "FATAL: task_io import failed"**
 A syntax error exists in `scripts/shared/task_io.py` or a dependency is missing. Check the scheduler log at `logs/scheduler/general.log`.
 
-**"Workspace still starting" or Ollama connection errors**
+**Ollama connection errors**
 Verify that Ollama is running and that `ollama.base_url` in `config.json` points to the correct address. Test with `curl http://<your-ollama-host>:11434/api/tags`.
 
 **RAG API not starting**
