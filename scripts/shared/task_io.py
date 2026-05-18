@@ -10,6 +10,8 @@ from pathlib import Path
 
 import frontmatter  # python-frontmatter
 
+from shared.validation_context import prepend_validation_context
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -203,23 +205,13 @@ def create_task_file(
         # Store the full dict so downstream agents (e.g. coder → QA) can forward it
         meta["validation_context"] = validation_context
 
-    # Prepend a Validation Context section so workers see it prominently in the body.
-    # This is the primary signal workers should act on — it appears before the task
-    # description so it cannot be missed even if the LLM skims the frontmatter.
-    if validation_context:
-        decision_type = validation_context.get("decision_type", "")
-        reasoning = validation_context.get("reasoning", "")
-        context_block = (
-            f"## Validation Context\n\n"
-            f"**This is a follow-up task. The orchestrator reviewed the previous attempt and decided: `{decision_type}`**\n\n"
-            f"**Reason:** {reasoning}\n\n"
-            f"Read the Validation Feedback Context section in your system prompt to understand "
-            f"how to adjust your approach for a `{decision_type}` request.\n\n"
-            f"---\n\n"
-        )
-        body = context_block + f"## Task Description\n\n{description}\n\n## Expected Output\n\n{expected_output}"
-    else:
-        body = f"## Task Description\n\n{description}\n\n## Expected Output\n\n{expected_output}"
+    # The Validation Context block (when present) is the primary signal a
+    # follow-up worker should act on — it appears before the task description
+    # so it cannot be missed even if the LLM skims the frontmatter. The
+    # wording lives in shared/validation_context.py so QA can inject the
+    # identical block at LLM-call-time (see agent_qa.review_with_llm).
+    description_section = f"## Task Description\n\n{description}\n\n## Expected Output\n\n{expected_output}"
+    body = prepend_validation_context(description_section, validation_context)
     post = frontmatter.Post(body, **meta)
 
     inbox = Path(inbox_path)

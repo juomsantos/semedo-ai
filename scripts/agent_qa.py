@@ -40,6 +40,7 @@ from shared.rag_tool import rag_query
 from shared.token_logger import log_tokens
 from shared.logger import AgentLogger
 from shared.config import load_config
+from shared.validation_context import prepend_validation_context
 
 AGENT_NAME = "qa"
 _config = load_config()
@@ -190,11 +191,21 @@ def execute_code(code: str, language: str, log: AgentLogger):
 
 def review_with_llm(
     task_description: str, full_result: str, execution, prior_results: list,
-    client: OllamaClient, log: AgentLogger, task_id: str = "unknown"
+    client: OllamaClient, log: AgentLogger, task_id: str = "unknown",
+    validation_context: dict | None = None,
 ) -> dict:
     """
     Call qwen3.5:9b to review code with optional web search.
     full_result is the raw coder result file content — all files included.
+
+    ``validation_context`` (M4): when the orchestrator issued a follow-up
+    decision (redo/refine/additional_work) on the parent task and the coder
+    chained the resulting QA subtask here, ``task_description`` came in via
+    ``original_description`` and so does not carry the ``## Validation
+    Context`` section that the QA system prompt explicitly expects. Passing
+    the dict in lets us prepend the section to ``user_message`` so QA's
+    review is calibrated to the decision type.
+
     Return {verdict: 'PASS'|'FAIL', feedback: str}.
     """
     system_prompt = load_system_prompt()
@@ -230,6 +241,12 @@ def review_with_llm(
 
 {execution_section}
 Please review the latest code (and prior work context if provided) to determine if the submission correctly and completely solves the original task."""
+
+    # M4: inject the orchestrator's validation context (if any) at the very
+    # top so the QA system prompt's "look for ## Validation Context first"
+    # instruction has something to find. No-op when the task wasn't a
+    # follow-up.
+    user_message = prepend_validation_context(user_message, validation_context)
 
     try:
         # Build initial messages for the agentic loop
@@ -399,6 +416,13 @@ Please fix these issues and try again."""
         # Pass the QA task's context_files (coder's previous output + prior iterations)
         # so the retry coder can see exactly what it wrote and make targeted fixes.
         retry_context_files = task["meta"].get("context_files", [])
+        # Known gap (M4): the orchestrator's validation_context is intentionally
+        # NOT forwarded onto this retry coder task. The retry prompt above
+        # already embeds the QA FAIL feedback in the description, so re-injecting
+        # the orchestrator's earlier redo/refine reasoning would mix two
+        # perspectives ("the parent task wanted X" + "the last attempt failed
+        # QA because Y") and risks confusing the coder. Reconsider if retry
+        # coders start losing context about *why* a follow-up was created.
         new_task_path = create_task_file(
             inbox_path=coder_inbox,
             task_type="code",
@@ -541,8 +565,15 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         log.info(f"Code executed: exit_code={execution['exit_code']}, timed_out={execution['timed_out']}")
 
     task_description = task["meta"].get("original_description") or task["body"]
-    # Pass the full result_content to the LLM — it sees every file the coder produced
-    review = review_with_llm(task_description, result_content, execution, prior_results, client, log, task_id)
+    # Pass the full result_content to the LLM — it sees every file the coder produced.
+    # validation_context (M4) reaches QA via the coder→QA chain (agent_coder.py
+    # forwards it on create_task_file) or directly when the orchestrator targets
+    # QA in a follow-up. Either way it must be re-injected into user_message
+    # because we feed `original_description` (intentionally VC-free) above.
+    review = review_with_llm(
+        task_description, result_content, execution, prior_results, client, log, task_id,
+        validation_context=task["meta"].get("validation_context"),
+    )
     log.info(f"QA verdict: {review['verdict']}")
 
     if review["verdict"] == "PASS":
