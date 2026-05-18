@@ -86,5 +86,5 @@ For security-relevant changes (C1, N7), add a regression test under `tests/`. Fo
 | M4 | `validation_context` not propagated to QA | `dba7172` |
 | M5 | Hand-rolled YAML parser in dashboard → `yaml.safe_load` | `6570b67` |
 | M6 | Duplicated agent boilerplate → `shared/agent_boilerplate.py` | `8e13b45` |
-| N1 | Magic numbers hoisted to module-top constants in `agent_orchestrator.py` | (pending) |
-| N2 | Late `import re` hoisted to module top in `task_io.py` (+3 sites in `agent_orchestrator.py`) | (pending) |
+| N1 | Magic numbers hoisted to module-top constants in `agent_orchestrator.py` | `d206e22` |
+| N2 | Late `import re` hoisted to module top in `task_io.py` (+3 sites in `agent_orchestrator.py`) | `d206e22` |
