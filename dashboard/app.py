@@ -12,13 +12,16 @@ Endpoints:
   GET /                    - Serve dashboard UI
 """
 
+import os
 import sys
+import secrets
 import shutil
 import requests as _requests
 import re
+from functools import wraps
 from pathlib import Path
 from datetime import datetime, timezone
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, render_template
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
 
@@ -43,12 +46,52 @@ from shared.config import load_config as _load_config
 # Initialize Flask app
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
-# CORS is restricted to loopback origins. The dashboard has no authentication
-# and exposes destructive state-changing endpoints (approve/reject/submit), so
-# allowing arbitrary origins would enable CSRF from any page the user visits
-# while the dashboard is open.
+# CORS is restricted to loopback origins. The dashboard exposes destructive
+# state-changing endpoints (approve/reject/submit), so allowing arbitrary
+# origins would enable CSRF from any page the user visits while the dashboard
+# is open. Loopback-only is a necessary but not sufficient guardrail — any
+# other process running on 127.0.0.1 (a dev server on a different port, a
+# malicious local script) can still hit these endpoints. The shared-secret
+# token below is the second layer that closes that gap.
 _LOOPBACK_ORIGIN_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
 CORS(app, origins=_LOOPBACK_ORIGIN_RE, supports_credentials=True)
+
+# ---------------------------------------------------------------------------
+# Shared-secret token for state-changing endpoints
+# ---------------------------------------------------------------------------
+# The token is read from $DASHBOARD_TOKEN if set; otherwise a fresh random
+# token is generated at startup. It is injected into the dashboard HTML as a
+# <meta name="dashboard-token"> tag, and the JS attaches it as an
+# X-Dashboard-Token header on every POST/DELETE call. A request without the
+# header (or with a stale one — e.g. after a restart) gets 401.
+#
+# Regenerating on each startup means open tabs need a refresh after the
+# server restarts. That is a deliberate trade-off vs. persisting the token
+# to disk: the in-memory approach has no on-disk secret to leak, and the
+# refresh is cheap. Set $DASHBOARD_TOKEN in the environment if you want the
+# token to survive restarts (e.g. when running under a process supervisor).
+DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN") or secrets.token_urlsafe(32)
+
+
+def require_dashboard_token(view):
+    """Reject requests that don't carry the matching X-Dashboard-Token header.
+
+    Uses ``secrets.compare_digest`` for constant-time comparison so a remote
+    attacker can't time the comparison to learn the token byte-by-byte. CORS
+    preflight (OPTIONS) is allowed through; Flask-CORS handles it before this
+    decorator runs in normal flow, but checking explicitly is cheap insurance.
+    """
+
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if request.method == "OPTIONS":
+            return view(*args, **kwargs)
+        supplied = request.headers.get("X-Dashboard-Token", "")
+        if not supplied or not secrets.compare_digest(supplied, DASHBOARD_TOKEN):
+            return jsonify({"error": "unauthorized"}), 401
+        return view(*args, **kwargs)
+
+    return wrapper
 
 # Initialize task monitor
 monitor = TaskMonitor(PROJECT_ROOT)
@@ -77,8 +120,8 @@ except Exception:
 
 @app.route("/")
 def index():
-    """Serve dashboard UI."""
-    return send_from_directory("templates", "index.html")
+    """Serve dashboard UI with the per-process token embedded as a meta tag."""
+    return render_template("index.html", dashboard_token=DASHBOARD_TOKEN)
 
 
 @app.route("/api/status")
@@ -170,6 +213,7 @@ def get_pending_approvals():
 
 
 @app.route("/api/pending-approvals/<task_id>/approve", methods=["POST"])
+@require_dashboard_token
 def approve_task(task_id):
     """Approve a pending task."""
     try:
@@ -182,6 +226,7 @@ def approve_task(task_id):
 
 
 @app.route("/api/pending-approvals/<task_id>/reject", methods=["POST"])
+@require_dashboard_token
 def reject_task(task_id):
     """Reject a pending task."""
     try:
@@ -216,6 +261,7 @@ def get_completed_tasks():
 
 
 @app.route("/api/tasks/submit", methods=["POST"])
+@require_dashboard_token
 def submit_task():
     """Submit a new task to the orchestrator."""
     try:
@@ -269,6 +315,7 @@ def submit_task():
 
 
 @app.route("/api/clear-cache", methods=["POST"])
+@require_dashboard_token
 def clear_cache():
     """Clear all cached data: task files, logs, and token counters."""
     try:
@@ -324,6 +371,7 @@ def clear_cache():
 # ---------------------------------------------------------------------------
 
 @app.route("/api/upload-context", methods=["POST"])
+@require_dashboard_token
 def upload_context_files():
     """Upload one or more local files into context/ and return their Windows paths."""
     if "files" not in request.files:
@@ -387,6 +435,7 @@ def rag_list_documents():
 
 
 @app.route("/api/rag/ingest", methods=["POST"])
+@require_dashboard_token
 def rag_ingest():
     """Ingest a document into the knowledge base."""
     try:
@@ -400,6 +449,7 @@ def rag_ingest():
 
 
 @app.route("/api/rag/documents/<doc_id>", methods=["DELETE"])
+@require_dashboard_token
 def rag_delete_document(doc_id):
     """Delete a document from the knowledge base."""
     try:
@@ -428,6 +478,7 @@ def rag_status():
 # ---------------------------------------------------------------------------
 
 @app.route("/api/chat", methods=["POST"])
+@require_dashboard_token
 def chat():
     """Chat endpoint with LLM and tools."""
     try:
@@ -523,6 +574,7 @@ def chat():
 
 
 @app.route("/api/chat/clear", methods=["POST"])
+@require_dashboard_token
 def clear_chat():
     """Clear chat history for a session."""
     try:
@@ -576,6 +628,13 @@ def main(port: int = 5000, debug: bool = False, host: str = "127.0.0.1"):
     print(f"  POST /api/pending-approvals/<id>/reject - Reject task")
     print(f"  POST /api/tasks/submit   - Submit new task")
     print(f"  POST /api/clear-cache    - Clear all cached data")
+    if not os.environ.get("DASHBOARD_TOKEN"):
+        # We auto-generated the token. Print it so callers running outside the
+        # browser (curl, scripts) can read it. The browser itself doesn't need
+        # this — the token is embedded in the served HTML.
+        print()
+        print(f"  Dashboard token (auto-generated): {DASHBOARD_TOKEN}")
+        print(f"  Set $DASHBOARD_TOKEN to make this stable across restarts.")
     print()
 
     app.run(host=host, port=port, debug=debug)

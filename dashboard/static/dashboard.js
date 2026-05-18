@@ -4,6 +4,25 @@
 
 const POLL_INTERVAL = 2000; // 1.5 seconds
 
+// Per-process token embedded in the served HTML as <meta name="dashboard-token">.
+// Sent on every state-changing request (POST/DELETE) as the X-Dashboard-Token
+// header so loopback-but-different-origin scripts can't forge approve/submit
+// /clear-cache calls. When the server restarts and regenerates the token,
+// open tabs need a refresh — fetch will start returning 401 until then.
+const DASHBOARD_TOKEN = (
+    document.querySelector('meta[name="dashboard-token"]')?.getAttribute('content') || ''
+);
+
+/**
+ * Merge the X-Dashboard-Token header into a fetch init object without
+ * clobbering any caller-supplied headers. Use this for every POST/DELETE.
+ */
+function withAuth(init = {}) {
+    const headers = new Headers(init.headers || {});
+    headers.set('X-Dashboard-Token', DASHBOARD_TOKEN);
+    return { ...init, headers };
+}
+
 let pollTimer = null;
 let lastUpdate = new Date();
 let completedTasksCache = [];        // populated on first focus of context search
@@ -281,9 +300,9 @@ function createApprovalTaskElement(task) {
 // Approve task
 async function approveTask(taskId) {
     try {
-        const response = await fetch(`/api/pending-approvals/${taskId}/approve`, {
+        const response = await fetch(`/api/pending-approvals/${taskId}/approve`, withAuth({
             method: 'POST',
-        });
+        }));
         
         if (response.ok) {
             await updateApprovals();
@@ -306,13 +325,13 @@ async function rejectTask(taskId) {
     if (reason === null) return; // User cancelled
     
     try {
-        const response = await fetch(`/api/pending-approvals/${taskId}/reject`, {
+        const response = await fetch(`/api/pending-approvals/${taskId}/reject`, withAuth({
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({ reason: reason || 'Rejected by user' }),
-        });
+        }));
         
         if (response.ok) {
             await updateApprovals();
@@ -543,10 +562,10 @@ async function handleContextFilePicker(input) {
             formData.append('files', file);
         }
 
-        const resp = await fetch('/api/upload-context', {
+        const resp = await fetch('/api/upload-context', withAuth({
             method: 'POST',
             body: formData,
-        });
+        }));
         const data = await resp.json();
 
         if (!resp.ok) {
@@ -632,7 +651,7 @@ async function submitTask(event) {
     submitBtn.textContent = 'Submitting...';
 
     try {
-        const response = await fetch('/api/tasks/submit', {
+        const response = await fetch('/api/tasks/submit', withAuth({
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -644,7 +663,7 @@ async function submitTask(event) {
                 expected_output: expectedOutput,
                 context_files: selectedContextFiles.map(s => s.output_path),
             }),
-        });
+        }));
 
         const data = await response.json();
 
@@ -1042,10 +1061,10 @@ async function handleClearCache() {
     btn.style.opacity = '0.6';
 
     try {
-        const response = await fetch('/api/clear-cache', {
+        const response = await fetch('/api/clear-cache', withAuth({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
-        });
+        }));
 
         if (!response.ok) {
             const data = await response.json();
@@ -1258,11 +1277,11 @@ async function kbIngestDocument() {
         // Generate a unique document_id (required by IngestRequest)
         const document_id = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const body = { document_id, content, metadata: { title: title || 'Untitled', source: source || '' } };
-        const resp = await fetch('/api/rag/ingest', {
+        const resp = await fetch('/api/rag/ingest', withAuth({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
-        });
+        }));
         const data = await resp.json();
         if (!resp.ok) {
             // FastAPI validation errors return detail as an array of objects
@@ -1309,7 +1328,7 @@ async function kbDeleteDocumentGroup(btn) {
     try {
         // Delete all chunks in parallel
         const results = await Promise.allSettled(
-            ids.map(id => fetch(`/api/rag/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }))
+            ids.map(id => fetch(`/api/rag/documents/${encodeURIComponent(id)}`, withAuth({ method: 'DELETE' })))
         );
         const failures = results.filter(r => r.status === 'rejected').length;
         if (failures > 0) {
@@ -1328,7 +1347,7 @@ async function kbDeleteDocumentGroup(btn) {
 async function kbDeleteDocument(docId) {
     // Legacy single-chunk delete (kept for compatibility)
     try {
-        await fetch(`/api/rag/documents/${encodeURIComponent(docId)}`, { method: 'DELETE' });
+        await fetch(`/api/rag/documents/${encodeURIComponent(docId)}`, withAuth({ method: 'DELETE' }));
         loadKnowledgeBase();
     } catch (e) {
         showNotification(`Delete failed: ${e.message}`, 'error');
@@ -1378,11 +1397,11 @@ function sendChatMessage() {
     const isoTs = now.toISOString().slice(0, 16).replace('T', ' ') + ' ' +
         Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-    fetch('/api/chat', {
+    fetch('/api/chat', withAuth({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, session_id: chatSessionId, timestamp: isoTs }),
-    })
+    }))
     .then(resp => {
         if (!resp.ok) {
             return resp.json().then(data => {
@@ -1456,11 +1475,11 @@ function clearChatHistory() {
 
     if (!confirm('Clear chat history?')) return;
 
-    fetch('/api/chat/clear', {
+    fetch('/api/chat/clear', withAuth({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: chatSessionId }),
-    })
+    }))
     .then(() => {
         document.getElementById('chat-messages').innerHTML = '';
         chatSessionId = null;
