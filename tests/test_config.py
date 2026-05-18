@@ -93,6 +93,54 @@ def test_agent_process_timeout_default_300():
     assert c.agent_process_timeout("x") == 300
 
 
+def test_agent_options_returns_configured_dict():
+    c = cfg.ProjectConfig({
+        "agents": {
+            "coder": {
+                "options": {"temperature": 0.2, "top_p": 0.9, "min_p": 0.05, "seed": 42},
+            }
+        }
+    })
+    opts = c.agent_options("coder")
+    assert opts == {"temperature": 0.2, "top_p": 0.9, "min_p": 0.05, "seed": 42}
+
+
+def test_agent_options_returns_empty_when_missing():
+    # `coder` in _make_config has no options block
+    assert _make_config().agent_options("coder") == {}
+
+
+def test_agent_options_returns_empty_for_unknown_agent():
+    assert _make_config().agent_options("nope") == {}
+
+
+def test_agent_options_returns_empty_when_null():
+    c = cfg.ProjectConfig({"agents": {"x": {"options": None}}})
+    assert c.agent_options("x") == {}
+
+
+def test_agent_options_returns_independent_copy():
+    """Mutating the returned dict must not affect the underlying config."""
+    c = cfg.ProjectConfig({"agents": {"x": {"options": {"temperature": 0.1}}}})
+    opts = c.agent_options("x")
+    opts["temperature"] = 9.9
+    assert c.agent_options("x")["temperature"] == 0.1
+
+
+def test_agent_thinking_returns_configured():
+    c = cfg.ProjectConfig({"agents": {"x": {"thinking": True}, "y": {"thinking": False}}})
+    assert c.agent_thinking("x") is True
+    assert c.agent_thinking("y") is False
+
+
+def test_agent_thinking_returns_none_when_missing():
+    assert _make_config().agent_thinking("coder") is None
+
+
+def test_agent_thinking_returns_none_for_unknown_agent():
+    assert _make_config().agent_thinking("nope") is None
+
+
 def test_web_search_api_key_returns_configured():
     assert _make_config().web_search_api_key() == "abc123"
 

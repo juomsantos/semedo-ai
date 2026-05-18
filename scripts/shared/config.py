@@ -50,6 +50,20 @@ class ProjectConfig:
         agent_config = self._config.get("agents", {}).get(agent_name, {})
         return agent_config.get("process_timeout", 300)
 
+    def agent_options(self, agent_name: str) -> dict:
+        """Return the per-agent Ollama ``options`` dict (may be empty).
+
+        Supported keys (passed verbatim to ``ollama.Client.chat(options=...)``):
+        temperature, top_k, top_p, min_p, seed, stop, num_ctx, num_predict.
+        Unknown keys are passed through unchanged."""
+        agent_config = self._config.get("agents", {}).get(agent_name, {})
+        return dict(agent_config.get("options") or {})
+
+    def agent_thinking(self, agent_name: str) -> Optional[bool]:
+        """Return per-agent ``thinking`` flag, or None if unset (let Ollama default apply)."""
+        agent_config = self._config.get("agents", {}).get(agent_name, {})
+        return agent_config.get("thinking")
+
     def web_search_api_key(self) -> str:
         """Get the Ollama API key for web search."""
         return self._config.get("web_search", {}).get("ollama_api_key", "")

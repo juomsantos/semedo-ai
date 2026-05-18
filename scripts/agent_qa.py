@@ -45,6 +45,8 @@ from shared.validation_context import prepend_validation_context
 AGENT_NAME = "qa"
 _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
+OPTIONS = _config.agent_options(AGENT_NAME)
+THINKING = _config.agent_thinking(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "qa" / "inbox"
 
 # Per-tool call limits for the QA agent
@@ -263,6 +265,8 @@ Please review the latest code (and prior work context if provided) to determine 
                 model=MODEL,
                 messages=messages,
                 tools=active_tools,
+                options=OPTIONS,
+                think=THINKING,
             )
 
             if result["type"] == "text":
@@ -339,7 +343,7 @@ Please review the latest code (and prior work context if provided) to determine 
                     "Please now provide your final review verdict based on the information gathered."
                 ),
             })
-            result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
+            result = client.chat_with_tools(model=MODEL, messages=messages, tools=[], options=OPTIONS, think=THINKING)
             if result["type"] == "text":
                 log_tokens_safe(AGENT_NAME, task_id, client)
                 response = result["content"]
@@ -356,7 +360,7 @@ Please review the latest code (and prior work context if provided) to determine 
                 "role": "user",
                 "content": "Your previous response was empty. Please provide your QA review verdict now.",
             })
-            result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
+            result = client.chat_with_tools(model=MODEL, messages=messages, tools=[], options=OPTIONS, think=THINKING)
             if result["type"] == "text":
                 log_tokens_safe(AGENT_NAME, task_id, client)
                 response = result["content"]

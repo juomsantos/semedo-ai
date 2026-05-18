@@ -33,6 +33,8 @@ from shared.config import load_config
 AGENT_NAME = "coder"
 _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
+OPTIONS = _config.agent_options(AGENT_NAME)
+THINKING = _config.agent_thinking(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "coder" / "inbox"
 
 
@@ -54,7 +56,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     user_message = build_user_message(task, style="coder", use_rag=True, logger=log)
 
     try:
-        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
+        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message, options=OPTIONS, think=THINKING)
         log_tokens_safe(AGENT_NAME, task_id, client)
         log.info(f"Coder response received ({len(response)} chars)")
     except OllamaError as e:

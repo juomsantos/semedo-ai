@@ -58,7 +58,7 @@ def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, clie
     """
     # Late import to avoid a circular import (agent_orchestrator imports from
     # this module to wire up main()).
-    from agent_orchestrator import AGENT_NAME, MODEL, load_validation_prompt
+    from agent_orchestrator import AGENT_NAME, MODEL, OPTIONS, THINKING, load_validation_prompt
 
     # Read original parent task from processing/ or outbox/
     processing_dir = _task_io.PROJECT_ROOT / "processing"
@@ -174,7 +174,7 @@ Description:
 Evaluate these results and decide if the work is complete. You have {MAX_ITERATIONS - iteration} iteration(s) remaining."""
 
     try:
-        response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=user_message)
+        response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=user_message, options=OPTIONS, think=THINKING)
         log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         log.info(f"Validation response received ({len(response)} chars)")
     except OllamaError as e:
@@ -201,7 +201,7 @@ Evaluate these results and decide if the work is complete. You have {MAX_ITERATI
         "Escape any newlines inside string values as \\n."
     )
     try:
-        repair_response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=repair_prompt)
+        repair_response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=repair_prompt, options=OPTIONS, think=THINKING)
         log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         log.info(f"Validation repair response received ({len(repair_response)} chars)")
     except OllamaError as e:

@@ -72,23 +72,39 @@ class OllamaClient:
         user_message: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.3,
+        options: Optional[dict] = None,
+        think: Optional[bool] = None,
     ) -> str:
         """
         Send a chat completion request to Ollama.
         Returns the assistant's reply as a plain string.
         Raises OllamaError on failure.
+
+        ``options`` overrides the default ``{"temperature": temperature}`` and
+        is passed verbatim to the Ollama library (any key supported by the
+        server is accepted, e.g. top_k, top_p, min_p, seed, stop, num_ctx,
+        num_predict). ``think`` toggles the model's reasoning mode when set;
+        when None it is omitted from the call so the library default applies.
         """
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_message})
 
+        merged_options = {"temperature": temperature}
+        if options:
+            merged_options.update(options)
+
+        chat_kwargs = {
+            "model": model,
+            "messages": messages,
+            "options": merged_options,
+        }
+        if think is not None:
+            chat_kwargs["think"] = think
+
         try:
-            response = self._client.chat(
-                model=model,
-                messages=messages,
-                options={"temperature": temperature},
-            )
+            response = self._client.chat(**chat_kwargs)
         except _ollama.ResponseError as e:
             raise OllamaError(f"Ollama API error: {e}") from e
         except Exception as e:
@@ -113,6 +129,8 @@ class OllamaClient:
         messages: list[dict],
         tools: list[Tool],
         temperature: float = 0.3,
+        options: Optional[dict] = None,
+        think: Optional[bool] = None,
     ) -> dict:
         """
         Send a chat request with tool definitions using Ollama's tool-calling API.
@@ -129,6 +147,11 @@ class OllamaClient:
                            {"role": "tool", "content": "<result>", "tool_name": "<name>"}
             tools:       List of Python callables or OpenAI tool-definition dicts.
             temperature: Sampling temperature (default 0.3).
+            options:     Per-call Ollama options dict; merged on top of
+                         ``{"temperature": temperature}`` (caller values win).
+                         Accepts any key the Ollama server recognises.
+            think:       Toggle the model's reasoning/think mode. When None,
+                         omitted entirely so the library default applies.
 
         Returns:
             A dict with one of two shapes:
@@ -139,13 +162,21 @@ class OllamaClient:
         Raises:
             OllamaError on network or API failure.
         """
+        merged_options = {"temperature": temperature}
+        if options:
+            merged_options.update(options)
+
+        chat_kwargs = {
+            "model": model,
+            "messages": messages,
+            "tools": tools if tools else None,
+            "options": merged_options,
+        }
+        if think is not None:
+            chat_kwargs["think"] = think
+
         try:
-            response = self._client.chat(
-                model=model,
-                messages=messages,
-                tools=tools if tools else None,
-                options={"temperature": temperature},
-            )
+            response = self._client.chat(**chat_kwargs)
         except _ollama.ResponseError as e:
             raise OllamaError(f"Ollama API error: {e}") from e
         except Exception as e:

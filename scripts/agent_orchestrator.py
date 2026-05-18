@@ -49,6 +49,8 @@ from shared.config import load_config
 AGENT_NAME = "orchestrator"
 _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
+OPTIONS = _config.agent_options(AGENT_NAME)
+THINKING = _config.agent_thinking(AGENT_NAME)
 INBOX = PROJECT_ROOT / "inbox"
 LOCK_FILE = PROJECT_ROOT / "processing" / "orchestrator.lock"
 

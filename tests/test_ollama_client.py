@@ -103,6 +103,46 @@ def test_chat_passes_temperature_in_options(client):
     assert client._client.chat.call_args.kwargs["options"] == {"temperature": 0.9}
 
 
+def test_chat_merges_options_with_temperature(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat(model="m", user_message="u", options={"top_p": 0.8, "top_k": 40})
+    sent = client._client.chat.call_args.kwargs["options"]
+    assert sent == {"temperature": 0.3, "top_p": 0.8, "top_k": 40}
+
+
+def test_chat_options_override_temperature(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat(model="m", user_message="u", temperature=0.3, options={"temperature": 0.7})
+    assert client._client.chat.call_args.kwargs["options"]["temperature"] == 0.7
+
+
+def test_chat_passes_min_p_passthrough(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat(model="m", user_message="u", options={"min_p": 0.05, "seed": 42, "stop": ["</s>"]})
+    sent = client._client.chat.call_args.kwargs["options"]
+    assert sent["min_p"] == 0.05
+    assert sent["seed"] == 42
+    assert sent["stop"] == ["</s>"]
+
+
+def test_chat_passes_think_when_set(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat(model="m", user_message="u", think=True)
+    assert client._client.chat.call_args.kwargs["think"] is True
+
+
+def test_chat_omits_think_when_none(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat(model="m", user_message="u")
+    assert "think" not in client._client.chat.call_args.kwargs
+
+
+def test_chat_options_none_uses_only_default_temperature(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat(model="m", user_message="u", options=None)
+    assert client._client.chat.call_args.kwargs["options"] == {"temperature": 0.3}
+
+
 def test_chat_raises_OllamaError_on_response_error(client):
     client._client.chat.side_effect = oc._ollama.ResponseError("server boom")
     with pytest.raises(oc.OllamaError, match="API error"):
@@ -171,6 +211,31 @@ def test_chat_with_tools_passes_none_when_tools_empty(client):
     client._client.chat.return_value = _make_chat_response()
     client.chat_with_tools(model="m", messages=[], tools=[])
     assert client._client.chat.call_args.kwargs["tools"] is None
+
+
+def test_chat_with_tools_merges_options_with_temperature(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat_with_tools(model="m", messages=[], tools=[], options={"top_p": 0.8, "min_p": 0.05})
+    sent = client._client.chat.call_args.kwargs["options"]
+    assert sent == {"temperature": 0.3, "top_p": 0.8, "min_p": 0.05}
+
+
+def test_chat_with_tools_options_override_temperature(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat_with_tools(model="m", messages=[], tools=[], options={"temperature": 0.9})
+    assert client._client.chat.call_args.kwargs["options"]["temperature"] == 0.9
+
+
+def test_chat_with_tools_passes_think_when_set(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat_with_tools(model="m", messages=[], tools=[], think=False)
+    assert client._client.chat.call_args.kwargs["think"] is False
+
+
+def test_chat_with_tools_omits_think_when_none(client):
+    client._client.chat.return_value = _make_chat_response()
+    client.chat_with_tools(model="m", messages=[], tools=[])
+    assert "think" not in client._client.chat.call_args.kwargs
 
 
 def test_chat_with_tools_raises_OllamaError_on_connection_error(client):

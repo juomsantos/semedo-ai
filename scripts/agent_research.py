@@ -40,6 +40,8 @@ from shared.config import load_config
 AGENT_NAME = "research"
 _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
+OPTIONS = _config.agent_options(AGENT_NAME)
+THINKING = _config.agent_thinking(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "research" / "inbox"
 
 # Per-tool call limits for the research agent
@@ -84,6 +86,8 @@ def run_agentic_loop(
             model=MODEL,
             messages=messages,
             tools=active_tools,
+            options=OPTIONS,
+            think=THINKING,
         )
 
         if result["type"] == "text":
@@ -162,7 +166,7 @@ def run_agentic_loop(
         ),
     })
     # One last plain chat call (no tools) to force a text response
-    result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
+    result = client.chat_with_tools(model=MODEL, messages=messages, tools=[], options=OPTIONS, think=THINKING)
     if result["type"] == "text":
         log_tokens_safe(AGENT_NAME, task_id, client)
         return result["content"]

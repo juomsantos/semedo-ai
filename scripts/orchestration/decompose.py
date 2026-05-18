@@ -40,6 +40,8 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     from agent_orchestrator import (
         AGENT_NAME,
         MODEL,
+        OPTIONS,
+        THINKING,
         WORKER_INBOXES,
         load_system_prompt,
     )
@@ -62,7 +64,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
     user_message = f"---\n{json.dumps(meta_for_json, indent=2)}\n---\n\n{task_body}"
 
     try:
-        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
+        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message, options=OPTIONS, think=THINKING)
         log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         log.info(f"Orchestrator LLM response received ({len(response)} chars)")
     except OllamaError as e:
@@ -119,6 +121,8 @@ def redecompose_with_research(parent_task_id: str, completed_subtasks: list, cli
     from agent_orchestrator import (
         AGENT_NAME,
         MODEL,
+        OPTIONS,
+        THINKING,
         WORKER_INBOXES,
         load_system_prompt,
     )
@@ -161,7 +165,7 @@ def redecompose_with_research(parent_task_id: str, completed_subtasks: list, cli
     )
 
     try:
-        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
+        response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message, options=OPTIONS, think=THINKING)
         log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
         log.info(f"Re-decomposition response received ({len(response)} chars)")
     except OllamaError as e:
