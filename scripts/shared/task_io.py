@@ -3,6 +3,7 @@ task_io.py — Task file read/write/move helpers.
 """
 
 import os
+import re
 import shutil
 import glob
 from datetime import datetime
@@ -108,12 +109,11 @@ def mark_processing(task_path):
     # Use string-based replacement to preserve ALL original frontmatter fields.
     # Avoids python-frontmatter round-trip which can silently drop fields on
     # Windows paths / datetime values (the N2 bug).
-    import re as _re
     content = new_path.read_text(encoding="utf-8")
     if content.startswith("---"):
         parts = content.split("---", 2)
         if len(parts) >= 3:
-            new_fm = _re.sub(r"^status:.*", "status: processing", parts[1], flags=_re.MULTILINE)
+            new_fm = re.sub(r"^status:.*", "status: processing", parts[1], flags=re.MULTILINE)
             if "status:" not in new_fm:
                 new_fm = new_fm.rstrip("\n") + "\nstatus: processing\n"
             content = f"---{new_fm}---{parts[2]}"
@@ -123,13 +123,12 @@ def mark_processing(task_path):
 
 def mark_awaiting_validation(task_path):
     """Move task to validation folder and update status to awaiting_validation."""
-    import re as _re
     new_path = move_task(task_path, get_folder("validation"))
     content = new_path.read_text(encoding="utf-8")
     if content.startswith("---"):
         parts = content.split("---", 2)
         if len(parts) >= 3:
-            new_fm = _re.sub(r"^status:.*", "status: awaiting_validation", parts[1], flags=_re.MULTILINE)
+            new_fm = re.sub(r"^status:.*", "status: awaiting_validation", parts[1], flags=re.MULTILINE)
             if "status:" not in new_fm:
                 new_fm = new_fm.rstrip("\n") + "\nstatus: awaiting_validation\n"
             content = f"---{new_fm}---{parts[2]}"
