@@ -64,6 +64,14 @@ def fake_project(tmp_path, monkeypatch):
     except ImportError:
         pass
 
+    # agent_boilerplate captures PROJECT_ROOT via `from shared.task_io import
+    # PROJECT_ROOT`, so it needs its own patch (same reason token_logger does).
+    try:
+        import shared.agent_boilerplate as agent_boilerplate_mod
+        monkeypatch.setattr(agent_boilerplate_mod, "PROJECT_ROOT", tmp_path)
+    except ImportError:
+        pass
+
     return tmp_path
 
 

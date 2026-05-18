@@ -30,12 +30,11 @@ from shared.task_io import (
     mark_processing,
     mark_awaiting_validation,
     mark_failed,
-    safe_read_context,
     PROJECT_ROOT,
 )
+from shared.agent_boilerplate import build_user_message, log_tokens_safe
 from shared.logger import AgentLogger
 from shared.config import load_config
-from shared.token_logger import log_tokens
 
 AGENT_NAME = "claude-code"
 _config = load_config()
@@ -84,16 +83,7 @@ def process_task(task: dict, log: AgentLogger):
     task_path = mark_processing(task["path"])
 
     # Optionally prepend context files to the prompt
-    user_message = task["body"]
-    context_files = task["meta"].get("context_files", [])
-    if context_files:
-        context_parts = []
-        for cf in context_files:
-            content = safe_read_context(cf, logger=log)
-            if content is not None:
-                context_parts.append(f"### Context: {Path(cf).name}\n\n{content}")
-        if context_parts:
-            user_message = "\n\n".join(context_parts) + "\n\n---\n\n" + user_message
+    user_message = build_user_message(task, style="claude-code", use_rag=False, logger=log)
 
     try:
         response = invoke_claude_code(user_message, log)
@@ -112,7 +102,10 @@ def process_task(task: dict, log: AgentLogger):
         output_path = str(PROJECT_ROOT / "outbox" / f"{task_id}_result.md")
 
     write_result(output_path, response, meta={"task_id": task_id, "agent": AGENT_NAME})
-    log_tokens(AGENT_NAME, task_id, 0, len(response.split()))  # Approximate token count via word count
+    # Approximate completion-token count via word count — the Claude CLI does
+    # not report tokens. M7 in REMAINING_ISSUES.md tracks replacing this with
+    # real Anthropic SDK counts.
+    log_tokens_safe(AGENT_NAME, task_id, response, fallback_completion=len(response.split()))
     mark_awaiting_validation(task_path)
     log.info(f"Task {task_id} complete → {output_path} (awaiting validation)")
 

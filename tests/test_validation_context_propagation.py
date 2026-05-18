@@ -199,10 +199,13 @@ def qa_review(monkeypatch):
     real call-site at ``agent_qa.process_task`` (line ~566)."""
     import agent_qa
 
-    # Don't touch logs/qa/tokens.jsonl during tests.
-    monkeypatch.setattr(agent_qa, "log_tokens", lambda *a, **kw: None)
-    # Stub the system prompt loader so it doesn't read a real file.
-    monkeypatch.setattr(agent_qa, "load_system_prompt", lambda: "QA SYSTEM PROMPT")
+    # Don't touch logs/qa/tokens.jsonl during tests. After M6, agent_qa imports
+    # ``log_tokens_safe`` from ``shared.agent_boilerplate`` instead of the raw
+    # ``log_tokens``.
+    monkeypatch.setattr(agent_qa, "log_tokens_safe", lambda *a, **kw: None)
+    # Stub the system prompt loader so it doesn't read a real file. M6 added
+    # an ``agent_name`` argument, so the stub must accept it.
+    monkeypatch.setattr(agent_qa, "load_system_prompt", lambda *a, **kw: "QA SYSTEM PROMPT")
 
     client = MagicMock()
     client.chat_with_tools.return_value = _stub_chat_response()

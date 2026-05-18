@@ -37,7 +37,7 @@ from shared.task_io import (
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.web_search import web_search, web_fetch
 from shared.rag_tool import rag_query
-from shared.token_logger import log_tokens
+from shared.agent_boilerplate import load_system_prompt, log_tokens_safe
 from shared.logger import AgentLogger
 from shared.config import load_config
 from shared.validation_context import prepend_validation_context
@@ -46,7 +46,6 @@ AGENT_NAME = "qa"
 _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "qa" / "inbox"
-SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "qa" / "system_prompt.md"
 
 # Per-tool call limits for the QA agent
 MAX_SEARCH_TURNS = 3   # max web_search calls per task
@@ -96,9 +95,6 @@ def acquire_lock(log) -> bool:
 def release_lock():
     """Remove the lockfile. Registered with atexit so it runs on clean exit or exception."""
     LOCK_FILE.unlink(missing_ok=True)
-
-def load_system_prompt() -> str:
-    return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def extract_code(result_content: str) -> tuple:
@@ -208,7 +204,7 @@ def review_with_llm(
 
     Return {verdict: 'PASS'|'FAIL', feedback: str}.
     """
-    system_prompt = load_system_prompt()
+    system_prompt = load_system_prompt(AGENT_NAME)
 
     if execution is _NOT_EXECUTED:
         execution_section = "### Execution Output\n*Not executed — static analysis only (non-Python code).*\n"
@@ -270,7 +266,7 @@ Please review the latest code (and prior work context if provided) to determine 
             )
 
             if result["type"] == "text":
-                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+                log_tokens_safe(AGENT_NAME, task_id, client)
                 response = result["content"]
                 log.info(f"QA review received ({len(response)} chars) after {turn} tool turn(s) (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS})")
                 break
@@ -345,11 +341,11 @@ Please review the latest code (and prior work context if provided) to determine 
             })
             result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
             if result["type"] == "text":
-                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+                log_tokens_safe(AGENT_NAME, task_id, client)
                 response = result["content"]
                 log.info(f"QA review received ({len(response)} chars) on final call")
             else:
-                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+                log_tokens_safe(AGENT_NAME, task_id, client)
                 response = "(No final verdict produced after maximum search iterations.)"
 
         # Retry logic for empty responses
@@ -362,7 +358,7 @@ Please review the latest code (and prior work context if provided) to determine 
             })
             result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
             if result["type"] == "text":
-                log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+                log_tokens_safe(AGENT_NAME, task_id, client)
                 response = result["content"]
                 log.info(f"QA review received ({len(response)} chars) on retry {empty_response_retries}")
 

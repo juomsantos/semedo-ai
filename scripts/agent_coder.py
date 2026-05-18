@@ -23,24 +23,17 @@ from shared.task_io import (
     mark_awaiting_validation,
     mark_failed,
     create_task_file,
-    safe_read_context,
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
-from shared.rag_injection import inject_rag_context
+from shared.agent_boilerplate import build_user_message, load_system_prompt, log_tokens_safe
 from shared.logger import AgentLogger
-from shared.token_logger import log_tokens
 from shared.config import load_config
 
 AGENT_NAME = "coder"
 _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "coder" / "inbox"
-SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "coder" / "system_prompt.md"
-
-
-def load_system_prompt() -> str:
-    return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def process_task(task: dict, client: OllamaClient, log: AgentLogger):
@@ -55,25 +48,14 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     task_path = mark_processing(task["path"])
 
-    system_prompt = load_system_prompt()
+    system_prompt = load_system_prompt(AGENT_NAME)
     # Pre-prompt RAG injection — the coder has no tool loop, so this is the
     # only way it can consult the knowledge base. See shared/rag_injection.py.
-    user_message = inject_rag_context(task["body"])
-
-    # Include any context files referenced in the task
-    context_files = task["meta"].get("context_files", [])
-    if context_files:
-        context_content = []
-        for cf in context_files:
-            content = safe_read_context(cf, logger=log)
-            if content is not None:
-                context_content.append(f"### {Path(cf).name}\n```\n{content}\n```")
-        if context_content:
-            user_message = "\n\n".join(context_content) + "\n\n---\n\n" + user_message
+    user_message = build_user_message(task, style="coder", use_rag=True, logger=log)
 
     try:
         response = client.chat(model=MODEL, system_prompt=system_prompt, user_message=user_message)
-        log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+        log_tokens_safe(AGENT_NAME, task_id, client)
         log.info(f"Coder response received ({len(response)} chars)")
     except OllamaError as e:
         log.error(f"Ollama error for {task_id}: {e}")

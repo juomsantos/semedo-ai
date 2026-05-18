@@ -28,21 +28,19 @@ from shared.task_io import (
     mark_processing,
     mark_awaiting_validation,
     mark_failed,
-    safe_read_context,
     PROJECT_ROOT,
 )
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.web_search import web_search, web_fetch
 from shared.rag_tool import rag_query
+from shared.agent_boilerplate import build_user_message, load_system_prompt, log_tokens_safe
 from shared.logger import AgentLogger
-from shared.token_logger import log_tokens
 from shared.config import load_config
 
 AGENT_NAME = "research"
 _config = load_config()
 MODEL = _config.agent_model(AGENT_NAME)
 INBOX = PROJECT_ROOT / "agents" / "research" / "inbox"
-SYSTEM_PROMPT_PATH = PROJECT_ROOT / "agents" / "research" / "system_prompt.md"
 
 # Per-tool call limits for the research agent
 MAX_SEARCH_TURNS = 5   # max web_search calls per task
@@ -54,10 +52,6 @@ MAX_TOOL_TURNS = MAX_SEARCH_TURNS + MAX_FETCH_TURNS + MAX_RAG_TURNS
 # Native tools — the ollama library introspects these functions' type
 # annotations and docstrings to auto-generate the JSON schemas.
 TOOLS = [rag_query, web_search, web_fetch]
-
-
-def load_system_prompt() -> str:
-    return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def build_initial_messages(system_prompt: str, user_message: str) -> list[dict]:
@@ -93,7 +87,7 @@ def run_agentic_loop(
         )
 
         if result["type"] == "text":
-            log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+            log_tokens_safe(AGENT_NAME, task_id, client)
             log.info(f"[{task_id}] Final answer received (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS})")
             return result["content"]
 
@@ -170,9 +164,9 @@ def run_agentic_loop(
     # One last plain chat call (no tools) to force a text response
     result = client.chat_with_tools(model=MODEL, messages=messages, tools=[])
     if result["type"] == "text":
-        log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+        log_tokens_safe(AGENT_NAME, task_id, client)
         return result["content"]
-    log_tokens(AGENT_NAME, task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+    log_tokens_safe(AGENT_NAME, task_id, client)
     return "(No final answer produced after maximum search iterations.)"
 
 
@@ -182,19 +176,8 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     task_path = mark_processing(task["path"])
 
-    system_prompt = load_system_prompt()
-    user_message = task["body"]
-
-    # Inject any context files into the user message
-    context_files = task["meta"].get("context_files", [])
-    if context_files:
-        context_content = []
-        for cf in context_files:
-            content = safe_read_context(cf, logger=log)
-            if content is not None:
-                context_content.append(f"### {Path(cf).name}\n\n{content}")
-        if context_content:
-            user_message = "\n\n---\n\n".join(context_content) + "\n\n---\n\n" + user_message
+    system_prompt = load_system_prompt(AGENT_NAME)
+    user_message = build_user_message(task, style="research", use_rag=False, logger=log)
 
     messages = build_initial_messages(system_prompt, user_message)
 
