@@ -184,7 +184,7 @@ Evaluate these results and decide if the work is complete. You have {MAX_ITERATI
     try:
         decision = parse_validation_decision(response)
         return decision
-    except Exception as first_err:
+    except ValueError as first_err:
         log.warning(
             f"Failed to parse validation decision for {parent_task_id} (attempt 1): {first_err}"
         )
@@ -212,7 +212,7 @@ Evaluate these results and decide if the work is complete. You have {MAX_ITERATI
         decision = parse_validation_decision(repair_response)
         log.info(f"Validation repair succeeded for {parent_task_id}")
         return decision
-    except Exception as second_err:
+    except ValueError as second_err:
         log.error(
             f"Failed to parse validation decision for {parent_task_id} (attempt 2, giving up): {second_err}"
         )

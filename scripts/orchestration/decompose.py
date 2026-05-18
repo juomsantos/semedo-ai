@@ -74,7 +74,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     try:
         subtasks, redecompose_after_research = parse_routing_decision(response)
-    except Exception as e:
+    except ValueError as e:
         log.error(f"Failed to parse routing decision for {task_id}: {e}")
         log.error(f"Raw response: {response[:500]}")
         mark_failed(task_path)
@@ -181,7 +181,7 @@ def redecompose_with_research(parent_task_id: str, completed_subtasks: list, cli
                 f"redecompose_with_research: {parent_task_id} returned redecompose_after_research "
                 f"again — ignoring flag to prevent infinite loop, dispatching subtasks as-is"
             )
-    except Exception as e:
+    except ValueError as e:
         log.error(f"Failed to parse re-decomposition decision for {parent_task_id}: {e}")
         log.error(f"Raw response: {response[:500]}")
         return

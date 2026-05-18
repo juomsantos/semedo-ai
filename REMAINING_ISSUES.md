@@ -2,28 +2,11 @@
 
 This document tracks audit findings from the original security & code-quality audit that have **not** yet been addressed. The Critical (Cn), High (Hn), and Major (Mn) items closed so far are listed at the bottom for context.
 
-Last updated: 2026-05-18 (after N1/N2 cleanup).
+Last updated: 2026-05-18 (after N3/N4/N5 cleanup).
 
 ---
 
 ## Nitpicks (low priority, but worth tracking)
-
-### N3 — Over-broad `try` blocks
-
-- Several `try: ... except Exception:` blocks remain in `agent_orchestrator.py` despite the C4 pass. C4 narrowed the ones that masked real bugs; the survivors are largely "log and continue" guards in the outer task loop. Worth a follow-up audit to confirm each surviving broad-catch is intentional.
-- **Effort:** ~30 min audit.
-
-### N4 — Dashboard `approvalsCache` is the only source of truth
-
-- [dashboard/static/dashboard.js:60](dashboard/static/dashboard.js:60) — there is still no `GET /api/pending-approvals/<id>` endpoint; the modal reads from the in-memory cache populated by the polling loop. If a user opens an approval detail after a server restart (cache empty) the modal renders `undefined` until the first poll completes.
-- **Fix:** Add a small `GET /api/pending-approvals/<id>` endpoint that re-reads the task file from `agents/claude-code/pending/`. Use it as the source of truth in `showApprovalDetail()`; keep the cache as an optimistic prefill only.
-- **Effort:** ~30 min.
-
-### N5 — Hardcoded dashboard fallback values
-
-- [dashboard/app.py:112](dashboard/app.py:112), [app.py:116](dashboard/app.py:116): `"qwen3.5:9b"` appears twice as a fallback model. Same pattern likely repeats for chat timeouts and tool-turn limits.
-- **Fix:** Define module-level constants (`DEFAULT_CHAT_MODEL`, `DEFAULT_CHAT_TIMEOUT_S`, etc.) and use them in both the config-loaded and fallback paths.
-- **Effort:** ~15 min.
 
 ### N6 — Per-call `validation/` folder scans
 
@@ -88,3 +71,6 @@ For security-relevant changes (C1, N7), add a regression test under `tests/`. Fo
 | M6 | Duplicated agent boilerplate → `shared/agent_boilerplate.py` | `8e13b45` |
 | N1 | Magic numbers hoisted to module-top constants in `agent_orchestrator.py` | `d206e22` |
 | N2 | Late `import re` hoisted to module top in `task_io.py` (+3 sites in `agent_orchestrator.py`) | `d206e22` |
+| N3 | Narrowed 4 JSON-parse `except Exception` → `ValueError` in orchestrator. Audit confirmed remaining broad catches are intentional log-and-continue per CLAUDE.md error-handling pattern (3). | (pending) |
+| N4 | Obsolete — closed by refactor. The dashboard no longer has an approval-detail modal or `approvalsCache`; approvals render inline with all needed metadata. No new endpoint needed. | n/a |
+| N5 | `DEFAULT_CHAT_MODEL` / `DEFAULT_CHAT_TIMEOUT_S` / `DEFAULT_CHAT_MAX_TOOL_TURNS` / `DEFAULT_RAG_BASE_URL` hoisted to module-top in `dashboard/app.py`; used in both config-loaded and outer-fallback paths. | (pending) |

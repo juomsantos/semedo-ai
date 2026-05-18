@@ -105,17 +105,25 @@ CHAT_SYSTEM_PROMPT_TEMPLATE = ""
 if chat_system_prompt_path.exists():
     CHAT_SYSTEM_PROMPT_TEMPLATE = chat_system_prompt_path.read_text(encoding='utf-8')
 
+# Defaults used both as the inner fallback (when config.json omits a key)
+# and as the outer fallback (when load_config itself blows up). Hoisted to
+# module-top so the two paths can't drift.
+DEFAULT_CHAT_MODEL = "qwen3.5:9b"
+DEFAULT_CHAT_TIMEOUT_S = 120
+DEFAULT_CHAT_MAX_TOOL_TURNS = 8
+DEFAULT_RAG_BASE_URL = "http://localhost:8000"
+
 # Load config for chat settings
 try:
     config = _load_config()
     chat_config = config._config.get("chat", {})
-    CHAT_MODEL = chat_config.get("model", config.agent_model("orchestrator") or "qwen3.5:9b")
-    CHAT_TIMEOUT = chat_config.get("timeout", 120)
-    CHAT_MAX_TOOL_TURNS = chat_config.get("max_tool_turns", 8)
+    CHAT_MODEL = chat_config.get("model", config.agent_model("orchestrator") or DEFAULT_CHAT_MODEL)
+    CHAT_TIMEOUT = chat_config.get("timeout", DEFAULT_CHAT_TIMEOUT_S)
+    CHAT_MAX_TOOL_TURNS = chat_config.get("max_tool_turns", DEFAULT_CHAT_MAX_TOOL_TURNS)
 except Exception:
-    CHAT_MODEL = "qwen3.5:9b"
-    CHAT_TIMEOUT = 120
-    CHAT_MAX_TOOL_TURNS = 8
+    CHAT_MODEL = DEFAULT_CHAT_MODEL
+    CHAT_TIMEOUT = DEFAULT_CHAT_TIMEOUT_S
+    CHAT_MAX_TOOL_TURNS = DEFAULT_CHAT_MAX_TOOL_TURNS
 
 
 @app.route("/")
@@ -419,7 +427,7 @@ def _rag_base_url() -> str:
     try:
         return _load_config().rag_api_url()
     except Exception:
-        return "http://localhost:8000"
+        return DEFAULT_RAG_BASE_URL
 
 
 @app.route("/api/rag/documents", methods=["GET"])
