@@ -138,4 +138,4 @@ For security-relevant changes (C1, N7), add a regression test under `tests/`. Fo
 | M3 | Inconsistent agent error-handling philosophy | `19a904c` |
 | M4 | `validation_context` not propagated to QA | `dba7172` |
 | M5 | Hand-rolled YAML parser in dashboard → `yaml.safe_load` | `6570b67` |
-| M6 | Duplicated agent boilerplate → `shared/agent_boilerplate.py` | _this PR_ |
+| M6 | Duplicated agent boilerplate → `shared/agent_boilerplate.py` | `8e13b45` |
