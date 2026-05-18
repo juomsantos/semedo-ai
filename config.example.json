@@ -9,19 +9,36 @@
   "agents": {
     "orchestrator": {
       "model": "qwen3.5:9b",
-      "process_timeout": 600
+      "process_timeout": 600,
+      "thinking": null,
+      "options": {
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "top_k": 40,
+        "min_p": 0.05,
+        "seed": 42,
+        "num_ctx": 16384,
+        "num_predict": 4096,
+        "stop": []
+      }
     },
     "coder": {
       "model": "qwen3.5:9b",
-      "process_timeout": 600
+      "process_timeout": 600,
+      "thinking": null,
+      "options": {}
     },
     "research": {
       "model": "qwen3.5:9b",
-      "process_timeout": 1800
+      "process_timeout": 1800,
+      "thinking": null,
+      "options": {}
     },
     "qa": {
       "model": "qwen3.5:9b",
-      "process_timeout": 1200
+      "process_timeout": 1200,
+      "thinking": null,
+      "options": {}
     },
     "claude-code": {
       "cli": true,
