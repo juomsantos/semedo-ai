@@ -23,7 +23,7 @@ A three-tier multi-agent system with a shared knowledge base:
 
 ## Key Technical Decisions
 
-- **RAG API** (`rag_api/main.py`) — FastAPI + ChromaDB persistent vector store. Embedding via `qwen3-embedding:8b` at `http://192.168.1.13:11434/api/embeddings` (response key `"embedding"`, dim=4096). Reranking implemented as cosine similarity using the embedding model (no native `/api/rerank` endpoint in Ollama). Config: `rag_api/config.py` uses plain `class Settings` with `os.getenv()` — **not** `pydantic_settings.BaseSettings` (not installed). ChromaDB `collection.get()` returns **flat lists**; `collection.query()` returns **nested lists** (one row per query vector) — critical distinction for indexing. URL configured in `config.json → rag_api.url` (default `http://localhost:8000`), accessible via `ProjectConfig.rag_api_url()`. Dependencies in `rag_api/requirements.txt`.
+- **RAG API** (`rag_api/main.py`) — FastAPI + ChromaDB persistent vector store. Embedding via `qwen3-embedding:8b` at `http://192.168.1.13:11434/api/embeddings` (response key `"embedding"`, dim=4096). Reranking implemented as cosine similarity using the embedding model (no native `/api/rerank` endpoint in Ollama). Config: `rag_api/config.py` uses a plain `class Settings` that reads `rag_api/config.json` (no env-var indirection, no `pydantic_settings.BaseSettings` — not installed). Has a `_KNOWN_KEYS` allowlist so a typo in `config.json` produces a `[rag_api/config.py] WARNING:` on stderr at startup instead of silently picking up the default (N9). ChromaDB `collection.get()` returns **flat lists**; `collection.query()` returns **nested lists** (one row per query vector) — critical distinction for indexing. URL configured in `config.json → rag_api.url` (default `http://localhost:8000`), accessible via `ProjectConfig.rag_api_url()`. Dependencies in `rag_api/requirements.txt`.
 - **RAG tool** (`scripts/shared/rag_tool.py`) — `rag_query(query: str, top_k: int = 5) -> str` follows the same pattern as `web_search.py`; returns a plain `str` (not a dict) so it is compatible with the Ollama tool-calling library which introspects type annotations. Graceful degradation: returns a plain error string (not an exception) if the RAG API is unavailable, so the tool loop continues normally without crashing.
 - **RAG context injection** — two modes of integration, chosen by what kind of LLM call the agent makes: (1) **tool mode** — research and QA agents use `chat_with_tools` and include `rag_query` in their `TOOLS` list; the model decides when to call it (up to 5 `rag_query` turns per task, combined with web search/fetch turns in the same `MAX_TOOL_TURNS` ceiling); (2) **pre-prompt injection** — coder and orchestrator use `client.chat` (no tool loop, so no way for the model to call `rag_query` mid-turn). They call `shared/rag_injection.py::inject_rag_context(task_body)` *before* building `user_message`; it queries the RAG API with the first 500 chars and prepends results as a `## Knowledge Base Context` section. Unavailable/error/no-results responses from `rag_query` are filtered out via `_NON_USEFUL_PREFIXES` so the task body is returned unchanged when the API is down — behaviour is identical to no injection at all. The helper is the single source of truth; both call sites previously had copy-pasted byte-for-byte blocks (audit finding M2).
 - **RAG API lifecycle** — `scheduler.py` manages the RAG API as a persistent subprocess (`subprocess.Popen`) rather than a one-shot script. `_start_rag_api()` launches `uvicorn main:app` in the `rag_api/` directory at startup; `_check_rag_api()` polls the process every 30 seconds and restarts it if it has exited; `_stop_rag_api()` terminates it gracefully (with `SIGKILL` fallback) on scheduler shutdown.
@@ -79,7 +79,8 @@ AI Team/
   DASHBOARD.md                           ← dashboard usage and API reference
   config.json                            ← centralized config (includes rag_api.url)
   RUN_SCHEDULER.bat / RUN_SCHEDULER.sh   ← quick-start scripts
-  requirements.txt
+  requirements.txt         ← direct deps, pinned to ==<version>
+  requirements.lock        ← full transitive closure, auto-generated
   requirements-dev.txt     ← pytest, pytest-cov
   pytest.ini               ← pytest config (testpaths=tests)
   tests/                   ← pytest suite — see ARCHITECTURE.md → Testing
@@ -103,7 +104,7 @@ AI Team/
   context/                 ← optional shared context files for tasks
   rag_api/                 ← Local knowledge base (FastAPI + ChromaDB)
     main.py                ← FastAPI app; endpoints: /health /ingest /query /documents
-    config.py              ← Settings class (plain os.getenv, NOT pydantic_settings)
+    config.py              ← Settings class reads rag_api/config.json; _KNOWN_KEYS guards against typos
     ollama_client.py       ← OllamaClient: embed() via /api/embeddings; rerank() via cosine sim
     vector_store.py        ← ChromaDBPersistentClient wrapper
     ingestion.py           ← TextChunker + DocumentLoader
@@ -165,6 +166,8 @@ The scheduler automatically starts the RAG API (`uvicorn` at `http://localhost:8
 cd rag_api
 pip install -r requirements.txt
 ```
+
+**Dependency upgrades.** Direct deps in `requirements.txt` / `rag_api/requirements.txt` are pinned to `==<version>`. The matching `.lock` files capture the full transitive closure resolved on the dev machine and are the authoritative install source for reproducible environments — `pip install -r requirements.lock`. To upgrade: bump the version in `requirements.txt`, `pip install -r requirements.txt --upgrade`, then `python scripts/_gen_locks.py` to refresh both `.lock` files, run the test suite, and commit.
 
 **Terminal 2 — Dashboard (optional):**
 ```bash

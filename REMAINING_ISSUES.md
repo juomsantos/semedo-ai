@@ -2,7 +2,7 @@
 
 This document tracks audit findings from the original security & code-quality audit that have **not** yet been addressed. The Critical (Cn), High (Hn), and Major (Mn) items closed so far are listed at the bottom for context.
 
-Last updated: 2026-05-18 (after N7 cleanup).
+Last updated: 2026-05-18 (after N8/N9 cleanup).
 
 ---
 
@@ -18,18 +18,6 @@ Last updated: 2026-05-18 (after N7 cleanup).
 
 - The status-code half of N7 was closed (see closed table). The other half — replacing `str(e)` in error bodies with a generic message + a server-side UUID for log correlation — was intentionally deferred. Dashboard responses still leak internal error text to the browser. Acceptable while the dashboard stays loopback-only; revisit if it's ever exposed beyond `127.0.0.1`.
 - **Fix:** In `_json_error_envelope` (`dashboard/app.py`), replace `str(e)` with `f"Internal error ({uid})"` for the 500 branch and log `uid → traceback` server-side. Keep the 400/404/503 branches as-is so client-input errors still tell the user what went wrong.
-- **Effort:** ~30 min.
-
-### N8 — `requirements.txt` uses `>=` only
-
-- `requirements.txt` and `rag_api/requirements.txt` both pin with `>=`. A `pip install` on a fresh machine in 6 months will pull whatever's current on PyPI — that's the route through which silent supply-chain compromises arrive, and the route through which "works on my machine" bugs arrive too.
-- **Fix:** Pin direct dependencies to `==`. Generate a `requirements.lock` via `pip freeze` for the working set, check it in, and document the workflow ("upgrade with `pip-compile`, then commit the new lock").
-- **Effort:** ~20 min.
-
-### N9 — RAG API `Settings` uses raw `os.getenv`
-
-- [rag_api/config.py](rag_api/config.py) — explicitly documented as "**not** `pydantic_settings.BaseSettings`" because pydantic-settings isn't installed. That's fine, but the hand-rolled approach skips type coercion (every config value is a string until you `int()` it) and silently accepts typos in env var names.
-- **Fix:** Either add `pydantic-settings` to `rag_api/requirements.txt` and use `BaseSettings`, or stay hand-rolled but add a `_REQUIRED_KEYS` sanity check at startup so a typo crashes fast instead of producing a confusing runtime error 20 minutes in.
 - **Effort:** ~30 min.
 
 ### N10 — No resource limits on agent subprocesses
@@ -75,3 +63,5 @@ For security-relevant changes (C1, N7), add a regression test under `tests/`. Fo
 | N4 | Obsolete — closed by refactor. The dashboard no longer has an approval-detail modal or `approvalsCache`; approvals render inline with all needed metadata. No new endpoint needed. | n/a |
 | N5 | `DEFAULT_CHAT_MODEL` / `DEFAULT_CHAT_TIMEOUT_S` / `DEFAULT_CHAT_MAX_TOOL_TURNS` / `DEFAULT_RAG_BASE_URL` hoisted to module-top in `dashboard/app.py`; used in both config-loaded and outer-fallback paths. | `1adb4f6` |
 | N7 (status codes) | `_json_error_envelope` decorator in `dashboard/app.py`: ValueError → 400, FileNotFoundError → 404, ConnectionError → 503, fallback → 500. Applied to 17 endpoints (skipping `clear_cache` and `rag_status` which have intentionally different response shapes). Error-message redaction still pending — see N7 partial entry. | `adef92c` |
+| N8 | Direct deps in `requirements.txt` + `rag_api/requirements.txt` pinned to `==`; `requirements.lock` + `rag_api/requirements.lock` capture true transitive closures (20 / 74 packages, derived from `importlib.metadata` walk — not a polluted `pip freeze`). Helper script `scripts/_gen_locks.py` regenerates both. Upgrade workflow documented in CLAUDE.md. | (pending) |
+| N9 | `rag_api/config.py`: `_KNOWN_KEYS` allowlist surfaces typos in `config.json` as stderr warnings at startup; bare `except Exception` narrowed to `(OSError, json.JSONDecodeError)` so JSON parse failures are reported instead of silently falling through to defaults. The audit's "raw `os.getenv`" framing was stale — the loader was already reading from JSON, not env vars. CLAUDE.md updated accordingly. | (pending) |
