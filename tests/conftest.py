@@ -57,10 +57,16 @@ def fake_project(tmp_path, monkeypatch):
     import shared.task_io as task_io_mod
     monkeypatch.setattr(task_io_mod, "PROJECT_ROOT", tmp_path)
 
-    # token_logger and any other shared modules with their own PROJECT_ROOT
+    # token_logger, logger, and any other shared modules with their own PROJECT_ROOT
     try:
         import shared.token_logger as token_logger_mod
         monkeypatch.setattr(token_logger_mod, "PROJECT_ROOT", tmp_path)
+    except ImportError:
+        pass
+
+    try:
+        import shared.logger as logger_mod
+        monkeypatch.setattr(logger_mod, "PROJECT_ROOT", tmp_path)
     except ImportError:
         pass
 

@@ -134,14 +134,19 @@ def test_non_useful_prefixes_constant_includes_expected_strings():
 
 
 # ---------------------------------------------------------------------------
-# Integration: rag_tool sentinels are filtered (no mocking — calls the real
-# rag_query which falls back to "Knowledge base unavailable" when the API
-# is offline, as it is in tests).
+# Filter sentinel strings — these must match rag_tool.py error messages
 # ---------------------------------------------------------------------------
 
 
-def test_real_rag_query_offline_returns_body_unchanged():
-    """Without mocking, the test RAG API is offline, so rag_query returns
-    "Knowledge base unavailable …" — inject_rag_context must drop it."""
-    result = ri.inject_rag_context("Some task body.")
+def test_filters_all_sentinel_messages_from_rag_query():
+    """When RAG returns a sentinel error message, inject_rag_context drops it."""
+    with patch.object(ri, "rag_query", return_value="Knowledge base unavailable (...)"):
+        result = ri.inject_rag_context("Some task body.")
+    assert result == "Some task body."
+
+
+def test_filters_rag_error_message():
+    """HTTP errors and API failures are filtered."""
+    with patch.object(ri, "rag_query", return_value="Knowledge base error: HTTP 500"):
+        result = ri.inject_rag_context("Some task body.")
     assert result == "Some task body."
