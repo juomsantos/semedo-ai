@@ -71,6 +71,6 @@ For security-relevant changes (C1, N7), add a regression test under `tests/`. Fo
 | M6 | Duplicated agent boilerplate → `shared/agent_boilerplate.py` | `8e13b45` |
 | N1 | Magic numbers hoisted to module-top constants in `agent_orchestrator.py` | `d206e22` |
 | N2 | Late `import re` hoisted to module top in `task_io.py` (+3 sites in `agent_orchestrator.py`) | `d206e22` |
-| N3 | Narrowed 4 JSON-parse `except Exception` → `ValueError` in orchestrator. Audit confirmed remaining broad catches are intentional log-and-continue per CLAUDE.md error-handling pattern (3). | (pending) |
+| N3 | Narrowed 4 JSON-parse `except Exception` → `ValueError` in orchestrator. Audit confirmed remaining broad catches are intentional log-and-continue per CLAUDE.md error-handling pattern (3). | `1adb4f6` |
 | N4 | Obsolete — closed by refactor. The dashboard no longer has an approval-detail modal or `approvalsCache`; approvals render inline with all needed metadata. No new endpoint needed. | n/a |
-| N5 | `DEFAULT_CHAT_MODEL` / `DEFAULT_CHAT_TIMEOUT_S` / `DEFAULT_CHAT_MAX_TOOL_TURNS` / `DEFAULT_RAG_BASE_URL` hoisted to module-top in `dashboard/app.py`; used in both config-loaded and outer-fallback paths. | (pending) |
+| N5 | `DEFAULT_CHAT_MODEL` / `DEFAULT_CHAT_TIMEOUT_S` / `DEFAULT_CHAT_MAX_TOOL_TURNS` / `DEFAULT_RAG_BASE_URL` hoisted to module-top in `dashboard/app.py`; used in both config-loaded and outer-fallback paths. | `1adb4f6` |
