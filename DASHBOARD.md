@@ -72,7 +72,7 @@ Per-agent statistics showing:
 - **Completion Tokens** — cumulative output tokens
 - **LLM Calls** — total Ollama calls
 
-`claude-code` shows `—` in token columns (it uses the Claude CLI, not Ollama directly).
+`claude-code` shows an approximate completion token count (word-count proxy) and `0` prompt tokens — the Claude CLI does not report token counts. These values are intentional approximations (M7).
 
 ### Logs Tab
 View agent execution logs. Select any agent (orchestrator, coder, research, qa, claude-code, scheduler). Shows last 50 log lines in **newest-first** order — most recent entry at the top.
@@ -118,6 +118,8 @@ An embedded LLM chat interface powered by `qwen3.5:9b` with live pipeline awaren
 **Creating tasks via chat:**
 
 Ask naturally ("research the best Python HTTP client libraries" or "create a code task to add pagination to the API"). The assistant describes what it's creating, then the backend extracts the task and submits it to the orchestrator. A confirmation with the new task ID is returned in the response.
+
+**Markdown rendering:** assistant and error responses are rendered as HTML using `marked.js`. Code blocks get syntax highlighting. User messages are displayed as plain text.
 
 **Session behaviour:** conversation history is stored in memory (not persisted across dashboard restarts). Each browser session gets a UUID; up to 20 turns of history are retained (oldest pairs are dropped when the limit is hit). The **Clear Chat** button resets the current session.
 

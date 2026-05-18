@@ -1,74 +1,85 @@
 # AI Team — Agent Coordination System
 
-This project is a multi-agent AI coordination system. Agents communicate through a shared filesystem. A file watcher (`scripts/shared/file_watcher.py`) triggers agents immediately when tasks arrive; timer-based polling is an optional fallback. A real-time web dashboard is available at `http://localhost:5000`. See `ARCHITECTURE.md` for the full design and `DASHBOARD.md` for dashboard usage.
+Multi-agent AI system using a shared filesystem as the message bus. Agents are triggered immediately by a file watcher; timer-based polling is an optional fallback. See `ARCHITECTURE.md` for the full design and `DASHBOARD.md` for dashboard/API reference.
 
-## Current Status: Fully Implemented ✓
-
-All agents are built and running with a continuous **orchestrator validation loop**: completed subtask results flow into `validation/`, the orchestrator reviews them, and decides whether to accept, refine, or request more work — up to 5 iterations before forcing completion.
+---
 
 ## What's Running
 
-A three-tier multi-agent system with a shared knowledge base:
+| Component | Model / Tech | Role |
+|---|---|---|
+| Orchestrator | qwen3.5:9b | Decomposes inbox tasks, validates subtask results, resolves dependencies, routes work |
+| Coder | qwen3.5:9b | Code generation; RAG pre-prompt injection before each task |
+| Research | qwen3.5:9b | Research, analysis, Q&A; tool loop: web_search + web_fetch + rag_query |
+| Claude Code | claude CLI | Complex reasoning tasks; requires manual dashboard approval before running |
+| QA | qwen3.5:9b | Code review + execution testing; tool loop: web_search + web_fetch + rag_query; one auto-retry on FAIL |
+| RAG API | FastAPI + ChromaDB | Local knowledge base at `http://localhost:8000`; started and monitored by the scheduler |
+| Dashboard | Flask | Real-time web UI at `http://localhost:5000`; independent process |
 
-1. **Claude (Cowork)** — master coordinator, writes tasks to `inbox/`
-2. **Orchestrator** (`qwen3.5:9b`) — triggered by file watcher (immediate) or timer fallback (0.5 min); runs 3 phases per cycle: validate completed work → resolve task dependencies → decompose and dispatch new tasks; queries RAG API before decomposition to surface relevant prior work
-3. **Workers:**
-   - `qwen3.5:9b` (coder) — code generation; skips tasks with unresolved dependencies; queries RAG API for relevant documentation before processing each task
-   - `qwen3.5:9b` (research) — research, summarization, Q&A; live `web_search` (up to 5 calls) + `web_fetch` (up to 10 calls) + `rag_query` (up to 5 calls) via Ollama Python library tool loop
-   - `claude CLI` (claude-code) — complex/reasoning tasks; tasks require manual approval first (land in `agents/claude-code/pending/` before `inbox/`)
-   - `qwen3.5:9b` (qa) — code review + execution testing; live `web_search` (up to 3 calls) + `web_fetch` (up to 6 calls) + `rag_query` (up to 5 calls) via Ollama Python library tool loop
+**Ollama server:** `http://192.168.1.13:11434` (configurable in `config.json`)
 
-4. **RAG API** (`FastAPI` + `ChromaDB`) — local knowledge base at `http://localhost:8000`; started automatically by the scheduler; accepts documents via POST `/ingest`, serves semantic search via POST `/query`. Embedding: `qwen3-embedding:8b` (dim=4096). Reranking: cosine similarity via the embedding model (no native Ollama `/api/rerank` endpoint required).
-5. **Dashboard** (`Flask`) — real-time web UI at `http://localhost:5000`; start with `python dashboard/run_dashboard.py`; includes **Knowledge Base** tab for ingesting and managing documents
+---
 
-## Key Technical Decisions
+## Key Technical Notes
 
-- **RAG API** (`rag_api/main.py`) — FastAPI + ChromaDB persistent vector store. Embedding via `qwen3-embedding:8b` at `http://192.168.1.13:11434/api/embeddings` (response key `"embedding"`, dim=4096). Reranking implemented as cosine similarity using the embedding model (no native `/api/rerank` endpoint in Ollama). Config: `rag_api/config.py` uses a plain `class Settings` that reads `rag_api/config.json` (no env-var indirection, no `pydantic_settings.BaseSettings` — not installed). Has a `_KNOWN_KEYS` allowlist so a typo in `config.json` produces a `[rag_api/config.py] WARNING:` on stderr at startup instead of silently picking up the default (N9). ChromaDB `collection.get()` returns **flat lists**; `collection.query()` returns **nested lists** (one row per query vector) — critical distinction for indexing. URL configured in `config.json → rag_api.url` (default `http://localhost:8000`), accessible via `ProjectConfig.rag_api_url()`. Dependencies in `rag_api/requirements.txt`.
-- **RAG tool** (`scripts/shared/rag_tool.py`) — `rag_query(query: str, top_k: int = 5) -> str` follows the same pattern as `web_search.py`; returns a plain `str` (not a dict) so it is compatible with the Ollama tool-calling library which introspects type annotations. Graceful degradation: returns a plain error string (not an exception) if the RAG API is unavailable, so the tool loop continues normally without crashing.
-- **RAG context injection** — two modes of integration, chosen by what kind of LLM call the agent makes: (1) **tool mode** — research and QA agents use `chat_with_tools` and include `rag_query` in their `TOOLS` list; the model decides when to call it (up to 5 `rag_query` turns per task, combined with web search/fetch turns in the same `MAX_TOOL_TURNS` ceiling); (2) **pre-prompt injection** — coder and orchestrator use `client.chat` (no tool loop, so no way for the model to call `rag_query` mid-turn). They call `shared/rag_injection.py::inject_rag_context(task_body)` *before* building `user_message`; it queries the RAG API with the first 500 chars and prepends results as a `## Knowledge Base Context` section. Unavailable/error/no-results responses from `rag_query` are filtered out via `_NON_USEFUL_PREFIXES` so the task body is returned unchanged when the API is down — behaviour is identical to no injection at all. The helper is the single source of truth; both call sites previously had copy-pasted byte-for-byte blocks (audit finding M2).
-- **RAG API lifecycle** — `scheduler.py` manages the RAG API as a persistent subprocess (`subprocess.Popen`) rather than a one-shot script. `_start_rag_api()` launches `uvicorn main:app` in the `rag_api/` directory at startup; `_check_rag_api()` polls the process every 30 seconds and restarts it if it has exited; `_stop_rag_api()` terminates it gracefully (with `SIGKILL` fallback) on scheduler shutdown.
-- **Ollama Python library** (`ollama.Client`) used for all LLM calls to `http://192.168.1.13:11434`; replaced raw `requests` calls in `ollama_client.py`
-- **Tool-calling loop** (`chat_with_tools`) used by research and QA agents; tools passed as **Python callables** — the library auto-generates JSON schemas from type annotations. Web tools (`web_search`, `web_fetch`) are defined in `shared/web_search.py` and delegate to `ollama.web_search()` / `ollama.web_fetch()` from the ollama Python library; API key in `config.json → web_search.ollama_api_key`. **Critical:** `OLLAMA_API_KEY` env var must be set *before* `import ollama` runs — `ollama_client.py` handles this by setting the env var from config at import time, making it the first shared import in every agent script.
-- **File watcher** (`scripts/shared/file_watcher.py`) — `TaskWatcher` (watchdog library) monitors `inbox/`, `validation/`, and all worker inboxes for `.task.md` events. When a file appears (or is modified), it coalesces bursts within 0.5s and triggers the relevant agent immediately via `scheduler.trigger_agent()`. Also scans for pre-existing files on startup. **Timer-based polling is optional** — controlled by `config.json → scheduler.enable_timer_polling` (currently `false`; agents are triggered exclusively by the file watcher). Requires `watchdog>=3.0.0` in `requirements.txt`; degrades gracefully if not installed.
-- **Claude Code worker:** `subprocess.run(["claude", "--print", "-p", prompt])` — every prompt is prefixed with `_PIPELINE_PREAMBLE` (defined at the top of `agent_claude_code.py`) which instructs the CLI to respond via stdout only, preventing it from attempting filesystem writes or requesting permissions in non-interactive mode.
-- **Task files** are `.task.md` with YAML frontmatter — see `ARCHITECTURE.md` for full schema
-- **System prompts** stored in `agents/<name>/system_prompt.md` — edit to change agent behaviour without touching code. The orchestrator has two: `system_prompt.md` (decomposition) and `validation_system_prompt.md` (validation decisions)
-- **Validation loop:** workers move completed tasks to `validation/` (not `outbox/`) via `mark_awaiting_validation()`; the orchestrator's Phase 1 reviews them and decides complete/refine/redo/additional_work. Max 5 iterations. The parent task stays in `processing/` throughout — it is only moved to `outbox/` when the orchestrator issues a `complete` decision. When the max-iteration cap is hit, the forced-completion path calls `write_result()` before `mark_completed()` (same as the normal complete branch) so `status: complete` and a `_result.md` summary are always written. On `complete`, the orchestrator sweeps ALL remaining tasks in `validation/` for that parent in two passes: (1) the known subtasks list from `get_completed_subtasks_by_parent`, then (2) a belt-and-suspenders glob of `validation/*.task.md` filtered by `parent_task_id` — catching any that slipped through the first pass. The stale-recovery path (parent already in outbox when orchestrator restarts) also uses `mark_completed()` rather than a bare `move_task()` for the same reason.
-- **QA gate in validation:** for code subtasks with `chain_to: qa`, the orchestrator's validation phase will not fire until the QA task has completed (helper `_find_qa_for_coder_subtask` searches all pipeline folders). If QA is still in-flight (`agents/qa/inbox/` or `processing/`), the parent is skipped for that cycle. When QA FAIL on first attempt (`retry_count == 0`), QA itself dispatches a retry coder task — the orchestrator *waits* for that retry cycle to resolve (retry coder → QA2) before validating; it does not issue a second redo. `_find_retry_coder_output` uses a timestamp guard so it only matches retry coder tasks created *after* the specific QA task (preventing false positives from old completed tasks in `outbox/`). If the retry coder ends up in `failed/` (e.g. LLM timeout), `_RETRY_CODER_FAILED` sentinel is returned and the gate releases with QA1's verdict so the orchestrator LLM can decide. When QA finishes (PASS or `retry_count > 0`), its verdict and result are injected into the subtask context passed to the validation LLM.
-- **Validation context propagation:** when the orchestrator issues a `redo`, `refine`, or `additional_work` decision, it passes a `validation_context` dict to the new follow-up subtasks. The dict carries the orchestrator's `decision_type` and `reasoning`, and reaches the worker LLM as a `## Validation Context` section produced by `shared/validation_context.py::prepend_validation_context` — the single source of truth for the wording. Two call-sites use it: (1) `task_io.create_task_file` prepends the section to the on-disk task body so coder/research/claude-code (which feed `task["body"]` straight to their LLM) see it for free, and so the dashboard renders it for humans; (2) `agent_qa.review_with_llm` calls the helper again on its constructed `user_message` because QA builds the message from `original_description` rather than `task["body"]` (the orchestrator deliberately keeps `original_description` VC-free so the coder→QA chain doesn't double-inject — see [agent_orchestrator.py:1240](scripts/agent_orchestrator.py:1240)) and would otherwise silently lose the section. The QA system prompt at `agents/qa/system_prompt.md` lines 69–79 instructs the model to look for this section and calibrate its review by `decision_type` (M4). Known gap: when QA fails a task on `retry_count==0` and spawns a retry coder ([agent_qa.py:402](scripts/agent_qa.py:402)), the orchestrator's `validation_context` is intentionally **not** forwarded onto that retry — the retry's description already embeds the QA FAIL feedback and we don't want to mix the two perspectives.
-- **Validation result window:** in `agent_orchestrator.py`, `MAX_RESULT_CHARS = 256000` (~64k tokens at 4 chars/token) caps the result text passed to the validation LLM. When a result exceeds this limit, a `[TRUNCATED — showing first N of M chars ...]` note is appended so the LLM knows the full content is on disk. `validation_system_prompt.md` has a matching "Truncated Results" section that instructs the orchestrator to issue `complete` on well-formed output rather than requesting more work just because the preview is cut off.
-- **Task dependencies:** coder tasks automatically get `depends_on: [research_task_id]` when research and code subtasks coexist; the orchestrator's Phase 2 wires the research result into `context_files` once complete, then unblocks the coder task. This dependency wiring is also applied to follow-up tasks created during `additional_work`/`refine`/`redo` iterations — so coder follow-ups always wait for research follow-ups to finish before running.
-- **`redecompose_after_research`:** when the orchestrator's decomposition LLM decides research must happen before it can produce a good implementation plan, it can set `redecompose_after_research: true` on the parent task and dispatch only the research subtask(s) first. Once research completes and passes validation, `redecompose_with_research()` re-calls the decomposition LLM with the research result injected as context, producing the full set of implementation subtasks. An infinite-loop guard clears the flag immediately after the first re-decomposition so subsequent validation cycles are not re-triggered.
-- **Orphan recovery:** four functions run at orchestrator startup in sequence:
-  1. `recover_orphaned_tasks()` — scans `processing/` for tasks with `status: pending` (tasks whose decomposition never finished, e.g. killed mid-LLM-call) and moves them back to `inbox/` to be re-dispatched. `dispatched` and `processing` statuses are left alone.
-  2. `recover_processing_subtasks()` — scans `processing/` for non-orchestrator subtasks with `status: processing` older than 720 seconds (12 min). These are workers killed mid-LLM-call after `mark_processing()` but before finishing. Resets `status` to `pending` and returns them to the appropriate worker inbox. Time-based detection (720s > any realistic LLM call including max tool turns). Does NOT increment `stall_retry_count` — this is infrastructure failure recovery, not task-content failure.
-  3. `recover_stalled_subtasks()` — scans `failed/` for subtask files whose parent is still in `processing/`. Groups by parent. If `stall_retry_count < 2`, resets the subtasks and returns them to the worker inbox, incrementing `stall_retry_count` on the parent. If max retries exhausted, writes a failure report and moves the parent to `failed/`. Subtasks whose parent is already in `outbox/` are silently skipped.
-  4. `recover_orphaned_validation_subtasks()` — sweeps `validation/` for stranded subtasks (QA tasks and retry coders created before `parent_task_id` propagation, or subtasks whose parent completed just before a restart). Two detection cases: (a) `parent_task_id` points to a `status: complete` parent in `outbox/`; (b) no `parent_task_id` but `output_path` result file already exists in `outbox/`. Both cases call `mark_completed()` to move the subtask to `outbox/`.
-- **`parent_task_id` propagation:** coder stamps `parent_task_id` on the QA task it creates via `chain_to: qa`; QA stamps `parent_task_id` on the retry coder task it creates on FAIL. This propagates the parent linkage through the full coder → QA → retry coder → retry QA chain, ensuring all generated subtasks are visible to `get_completed_subtasks_by_parent` and are swept to `outbox/` when the parent closes. Without this, QA tasks and retry coders had no `parent_task_id` and were left stranded in `validation/` after parent completion.
-- **SIGINT isolation:** agent subprocesses are spawned with `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP` (Windows) or `start_new_session=True` (Unix) so a Ctrl+C in the scheduler terminal does not propagate to agents mid-LLM-call, preventing task orphaning.
-- **Startup health checks:** before spawning any agents, the scheduler (a) flushes all `__pycache__` directories under `scripts/` so agents always import fresh bytecode, (b) test-imports `shared/task_io.py` — if it fails to import, the scheduler logs a FATAL error and aborts without starting any agents, and (c) initialises the file watcher (`TaskWatcher`) for all task folders.
-- **QA feedback:** the `FEEDBACK:` block in QA's LLM response is captured in full (multi-line) using `re.DOTALL`, so retry tasks receive complete actionable feedback rather than a truncated first line.
-- **QA empty-response retry:** if Ollama returns an empty or whitespace-only response, QA retries the LLM call up to 2 times before defaulting to FAIL. The retry condition checks `response is None or response.strip() == ""` (not a simple truthiness check, which would miss empty strings).
-- **Task ID uniqueness:** IDs include microseconds (`task_YYYYMMDD_HHMMSS_microseconds`) to prevent collisions when subtasks are created in the same second
-- **Approval gate for claude-code:** orchestrator routes to `pending_approval` which places tasks in `agents/claude-code/pending/`; approve or reject from the dashboard **Approvals** tab (or manually move files). The dispatch validator accepts both `'pending_approval'` and `'claude-code'` as valid worker strings. The `approve_task` function in `task_monitor.py` writes the approved file with a leading `---` delimiter (`f"---\n{frontmatter}\n---\n{body}"`) so `python-frontmatter` can detect the YAML block — omitting this delimiter caused `id` to be read as `"unknown"` (the N2 bug).
-- **Worker task status:** `mark_processing()` writes `status: processing` into the task frontmatter before moving it to `processing/`. This prevents the orphan recovery loop from re-dispatching actively running subtasks (which would previously match on `status: pending`). Uses a string-based regex replacement (not a `python-frontmatter` round-trip) to guarantee all original frontmatter fields (id, output_path, parent_task_id, etc.) are preserved — the round-trip approach was the N2 bug that caused `agent_claude_code.py` to read `id` as `"unknown"` and write results to `unknown_result.md`.
-- **`context_files` wiring:** when the orchestrator's dependency resolution phase unblocks a coder task, it reads the completed research task's `output_path` from its metadata in `outbox/` and injects the path into the coder task's `context_files` list. The coder therefore always receives research findings as context.
-- **`write_result` import:** imported at module level in `agent_orchestrator.py` (not inside a conditional block) so the validation decision handler can always reference it, preventing `UnboundLocalError` and ensuring parent task `status: complete` is persisted before `mark_completed()` moves the file to `outbox/`. This fixes the History tab displaying completed tasks.
-- **UTF-8 encoding:** all `open()` calls across every agent script and `shared/task_io.py` use `encoding='utf-8'`. This prevents the Windows default codec (`cp1252`) from crashing on UTF-8 characters (e.g. non-ASCII chars in research output written as context files for the coder).
-- **Task file parsing (dashboard):** `dashboard/task_monitor.py::_parse_yaml_frontmatter` uses `yaml.safe_load` on the frontmatter block. (Earlier versions had a hand-rolled split-on-colon parser that silently dropped colons-in-values, couldn't read lists/dicts, and was kept "to avoid Windows path failures" — but PyYAML actually handles unquoted backslash paths fine since `\` only has escape semantics inside double-quoted scalars.) Malformed YAML or non-mapping documents return `{}`. The task monitor scans all pipeline folders including `validation/` (`get_all_tasks`, `get_task_detail`, `get_task_payload` all include this folder). Worker result files are identified by scanning `outbox/*_result.md` for files whose embedded `agent:` metadata matches — since worker `.task.md` files stay in `validation/`, not `outbox/`, this is the only reliable source of worker results.
-- **Dashboard auth (H2):** state-changing endpoints (`approve`, `reject`, `submit`, `clear-cache`, `upload-context`, `rag/ingest`, `rag/documents` DELETE, `chat`, `chat/clear`) are gated by an `X-Dashboard-Token` header. The token is read from `$DASHBOARD_TOKEN` if set, otherwise a fresh `secrets.token_urlsafe(32)` is generated at process startup. It is injected into the served HTML as `<meta name="dashboard-token">`; `dashboard.js` reads it once and attaches it via a `withAuth()` wrapper to every POST/DELETE. Read-only `GET` endpoints stay open — the dashboard's 2s polling loop hits them constantly and they expose no destructive actions. After a server restart, open browser tabs need a refresh (the new token isn't in their HTML yet) — set `DASHBOARD_TOKEN` in the environment if you want stability across restarts. CORS is also restricted to loopback origins; the token is the second layer that covers other 127.0.0.1-but-different-port processes.
-- **Dashboard logs tab:** entries are rendered newest-first (`[...data.logs].reverse()`) and the container scrolls to the top on update, so the latest line is always immediately visible.
-- **Dashboard Approvals modal:** `dashboard.js` keeps an `approvalsCache` object (keyed by task ID) that is populated on every `updateApprovals()` call. `showApprovalDetail()` reads directly from this cache — there is no `/api/pending-approvals/<id>` endpoint, so the previous `fetch` call returned an error object and all metadata fields showed as `undefined`.
-- **Coder import checklist:** `agents/coder/system_prompt.md` includes a mandatory "Import Checklist" section listing every commonly-forgotten stdlib module (`sys`, `os`, `re`, `json`, `argparse`, `pathlib`, etc.) with examples of what each is needed for, plus a final scan instruction. This directly targets the `import sys` omission that caused all T2 QA failures in v7.
-- **Token logging:** after every Ollama call, each agent appends `{ts, task_id, prompt, completion}` to `logs/<agent>/tokens.jsonl` via `scripts/shared/token_logger.py`; the dashboard Agent Stats tab shows cumulative totals
-- **Concurrency guard:** orchestrator uses a lockfile (`processing/orchestrator.lock`) with PID validation
-- **Scheduler** is a Python threading-based loop (`scripts/scheduler.py`), not cron — works on Windows
-- **Config** centralized in `config.json`; loaded via `scripts/shared/config.py` (`ProjectConfig` class); Ollama timeout is `360s`. Each agent also has a `process_timeout` (scheduler-level kill ceiling): orchestrator 600s, coder 600s, research 1800s, qa 1200s, claude-code 600s. `process_timeout` must exceed `ollama_timeout × max_tool_turns` to avoid killing an agent mid-loop. Each Ollama-backed agent (orchestrator/coder/research/qa) accepts an optional per-agent `options` dict and `thinking` boolean — `options` is passed verbatim to `ollama.Client.chat(options=...)` and supports `temperature`, `top_k`, `top_p`, `min_p`, `seed`, `stop`, `num_ctx`, `num_predict` (plus any other key the server accepts); `thinking` toggles the model's reasoning mode (omitted from the call when null/None so the library default applies). Accessed via `ProjectConfig.agent_options(name)` / `agent_thinking(name)` and threaded through every `chat()` / `chat_with_tools()` call in each agent module via the `OPTIONS` / `THINKING` constants defined next to `MODEL`.
-- **Dashboard** is a separate Flask process (`dashboard/app.py`); reads directly from the shared filesystem — no DB required; tasks can be submitted from the **Submit Task** tab; results browsable by agent in the **Results** tab
-- **Log timestamps** use `datetime.fromtimestamp(time.time(), tz=timezone.utc)` — correct UTC on Windows
-- **Test suite** lives under `tests/` (pytest). Run with `pytest` after `pip install -r requirements-dev.txt`. The `fake_project` fixture in `tests/conftest.py` builds a temp pipeline tree and monkey-patches `PROJECT_ROOT` in `shared.task_io`, `shared.token_logger`, and (per-test) `agent_orchestrator`, so tests never touch the real `inbox/`/`outbox/`. Network is mocked in `test_rag_tool.py` (`requests`) and `test_ollama_client.py` (`_ollama.Client`). Current coverage on `scripts/shared/` is ~82% weighted (config/rag_tool/token_logger 100%, logger 97%, ollama_client 94%, task_io 91%); `file_watcher.py` and `web_search.py` are deferred. The orchestrator's pure helpers (`_find_qa_for_output`, `_find_retry_coder_output`, `_find_qa_for_coder_subtask`, `_extract_qa_verdict`) are covered; LLM-driven paths (decomposition, validation, recovery) need full Ollama mocking and are out of scope for the initial suite. See `ARCHITECTURE.md → Testing` for fixtures and conventions when adding new tests.
-- **Module-level logger in `agent_orchestrator.py`:** the `_find_*` helpers are not passed an `AgentLogger`, so they use `_module_log = logging.getLogger(__name__)` (defined at top of file) for `log.debug()` calls inside narrowed `except` blocks. Calling `log.<level>` (without `_module_log`) inside these helpers will `NameError` — `log` only exists as a local in `main()`.
-- **Agent error-handling patterns:** three patterns are used across the agents — pick the one that matches the error's position in the call chain. (1) **Startup pre-flight** — each agent's `main()` verifies its external dependency (Ollama for coder/research/qa/orchestrator; the `claude` CLI for claude-code) before touching any task files; on failure it logs the error and `sys.exit(1)` so the scheduler can surface the problem. (2) **Critical-path failure** — `OllamaError` from the per-task LLM call is caught in `process_task`: workers and orchestrator-decompose log it and call `mark_failed(task_path)` so the task moves to `failed/`; orchestrator validation/repair returns `None` or a sentinel so the task is retried on the next cycle rather than being thrown out. (3) **Outer task-loop guard** — the `for task_path in tasks:` loop in every `main()` wraps `process_task` in `try / except Exception as e: log.error(...)` so one corrupt task doesn't kill the whole cycle. Inside `chat_with_tools` loops the per-tool exceptions are caught and the loop continues (tool result is recorded as failure text, model can recover). Only QA retries on empty LLM responses (up to 2x) — its verdict is the gate decision and a missing one defaults to FAIL; other agents accept the (possibly empty) response and let downstream logic handle it.
+**RAG injection — two modes:**
+- *Tool mode* (research, QA): `rag_query` is in the `TOOLS` list; the model decides when to call it (up to 5 turns within the shared `MAX_TOOL_TURNS` ceiling).
+- *Pre-prompt mode* (coder, orchestrator): `inject_rag_context()` in `shared/rag_injection.py` queries the RAG API on the first 500 chars of the task body and prepends a `## Knowledge Base Context` block before the LLM call. Unavailable/empty results are silently filtered — the task body is returned unchanged if the API is down.
+
+**OLLAMA_API_KEY must be set before `import ollama` runs.** `ollama_client.py` does this at import time from `config.json`. It is always the first shared import in every agent script.
+
+**`context_files` paths must be Windows paths.** The coder calls `Path(cf).exists()` on Windows and silently skips anything that doesn't resolve. Always read `output_path` from a task's own frontmatter — never use `Path(...).resolve()` from bash (produces Linux mount paths the coder can't open).
+
+**`mark_processing()` uses regex, not a frontmatter round-trip.** A round-trip via `python-frontmatter` drops fields silently. The regex replacement guarantees all original frontmatter fields survive (id, output_path, parent_task_id, etc.).
+
+**Dashboard YAML parser** (`task_monitor.py::_parse_yaml_frontmatter`) uses `yaml.safe_load`. PyYAML handles unquoted Windows backslash paths correctly. Malformed YAML returns `{}`.
+
+**Dashboard auth:** state-changing endpoints are gated by an `X-Dashboard-Token` header. The token is generated at startup (or read from `$DASHBOARD_TOKEN`), injected into the served HTML as `<meta name="dashboard-token">`, and attached by `dashboard.js` to every POST/DELETE via `withAuth()`. After a dashboard restart, browser tabs need a refresh. Set `$DASHBOARD_TOKEN` for stability across restarts.
+
+**Dashboard endpoints all return JSON errors.** Every Flask endpoint is wrapped with `@_json_error_envelope` — unhandled exceptions return `{"error": "..."}` with an appropriate status code rather than an HTML 500 page.
+
+**Dashboard chat markdown:** assistant responses are rendered as HTML via `marked.js` (GFM mode). User messages are plain text.
+
+**Validation loop mechanics:**
+- Workers move completed tasks to `validation/` via `mark_awaiting_validation()` — never directly to `outbox/`.
+- Orchestrator Phase 1 reviews each parent's subtasks and returns `complete | refine | redo | additional_work`. Max 5 iterations; forced `complete` at the cap.
+- On `complete`, the orchestrator sweeps all remaining subtasks for that parent out of `validation/` in two passes (known list + glob fallback) before closing.
+- `MAX_RESULT_CHARS = 256000` caps what's passed to the validation LLM; truncated results get a `[TRUNCATED]` note so the LLM doesn't request more work just because the preview is cut.
+
+**QA gate:** the orchestrator's Phase 1 does not fire on a code subtask until its QA task has finished. If QA is still in-flight, the parent is skipped that cycle. On first FAIL (`retry_count == 0`), QA dispatches a retry coder task; the orchestrator waits for the full retry cycle (retry coder → QA2) before validating. `_find_retry_coder_output` uses a timestamp guard to avoid matching old completed tasks. If the retry coder ends up in `failed/`, a sentinel is returned and Phase 1 uses QA1's verdict.
+
+**Validation context:** on `redo`/`refine`/`additional_work`, a `## Validation Context` block (from `shared/validation_context.py::prepend_validation_context`) is prepended to follow-up task bodies. Two injection points: `task_io.create_task_file` (covers coder/research/claude-code, which read `task["body"]` directly) and `agent_qa.review_with_llm` (QA builds its prompt from `original_description`, so it re-injects explicitly). The `original_description` field is kept free of validation context so the coder→QA chain doesn't double-inject.
+
+**`parent_task_id` propagation:** coder stamps it on the QA task; QA stamps it on any retry coder. This chains the full coder → QA → retry coder → retry QA linkage so all generated subtasks are swept to `outbox/` when the parent closes.
+
+**`redecompose_after_research`:** if the decomposition LLM decides it needs research output before producing a good plan, it sets this flag and dispatches only the research subtask. After research passes validation, `redecompose_with_research()` re-calls the decomposition LLM with research results injected, then dispatches the full plan. The flag is cleared immediately after re-decomposition.
+
+**Orphan recovery** (runs at orchestrator startup, in `orchestration/recovery.py`):
+1. `recover_orphaned_tasks()` — returns `status: pending` parent tasks in `processing/` to `inbox/`.
+2. `recover_processing_subtasks()` — returns subtasks stuck in `status: processing` for >720s to their worker inbox (workers killed mid-LLM-call). Does not increment `stall_retry_count`.
+3. `recover_stalled_subtasks()` — retries subtasks in `failed/` whose parent is still in `processing/` (up to `stall_retry_count < 2`); writes failure report and moves parent to `failed/` at the limit.
+4. `recover_orphaned_validation_subtasks()` — sweeps `validation/` for subtasks whose parent completed before a restart.
+
+**Agent error handling — three patterns:**
+1. *Startup pre-flight*: `main()` checks external dependency (Ollama / claude CLI); `sys.exit(1)` on failure.
+2. *Critical-path failure*: `OllamaError` on the per-task LLM call → `mark_failed(task_path)` (workers) or return sentinel (orchestrator phases).
+3. *Outer loop guard*: the `for task_path in tasks:` loop wraps `process_task` in `try/except Exception` so one corrupt task doesn't kill the cycle.
+
+**Agent boilerplate** (`shared/agent_boilerplate.py`): `load_system_prompt`, `build_user_message(task, *, style)`, `log_tokens_safe`. Three styles — `"coder"`, `"research"`, `"claude-code"` — produce different context-file rendering formats. QA does not use `build_user_message` because it builds its prompt from `original_description`, not `task["body"]`.
+
+**Orchestrator package** (`scripts/orchestration/`): `decompose.py`, `validate.py`, `dispatch.py`, `recovery.py`, `qa_chain.py`, `parsing.py`. `agent_orchestrator.py` is a thin entrypoint. Helpers inside the sub-modules use `_module_log = logging.getLogger(__name__)` — not `log`, which only exists as a local in `main()`.
+
+**Token logging:** Ollama-backed agents append `{ts, task_id, prompt, completion}` to `logs/<agent>/tokens.jsonl`. The `claude-code` worker uses a word-count proxy for completion tokens and logs `0` for prompt tokens (the Claude CLI does not report counts).
+
+**SIGINT isolation:** agent subprocesses use `CREATE_NEW_PROCESS_GROUP` (Windows) or `start_new_session=True` (Unix) so Ctrl+C in the scheduler terminal doesn't propagate to in-flight LLM calls.
+
+**Scheduler startup sequence:** (1) flush `__pycache__` under `scripts/`; (2) test-import `shared/task_io.py` — abort on failure; (3) start RAG API subprocess; (4) init file watchers; (5) start scheduling loop.
+
+**Config:** `config.json` → `scripts/shared/config.py` (`ProjectConfig`). Key fields: `ollama.timeout` (360s per call), `agents.<name>.process_timeout` (scheduler kill ceiling — must exceed `timeout × max_tool_turns`), `agents.<name>.options` (passed verbatim to `ollama.Client.chat`), `agents.<name>.thinking` (null = library default), `scheduler.enable_timer_polling` (currently false), `rag_api.url`.
+
+**Dependencies:** pinned to `==<version>` in `requirements.txt` / `rag_api/requirements.txt`. Full transitive closure in `requirements.lock`. To upgrade: bump version, `pip install -r requirements.txt --upgrade`, then `python scripts/_gen_locks.py`, run tests, commit.
+
+---
 
 ## Folder Structure
 
@@ -77,78 +88,91 @@ AI Team/
   CLAUDE.md                              ← you are here
   ARCHITECTURE.md                        ← full design doc
   DASHBOARD.md                           ← dashboard usage and API reference
-  config.json                            ← centralized config (includes rag_api.url)
+  config.json                            ← centralized runtime config
   RUN_SCHEDULER.bat / RUN_SCHEDULER.sh   ← quick-start scripts
-  requirements.txt         ← direct deps, pinned to ==<version>
-  requirements.lock        ← full transitive closure, auto-generated
-  requirements-dev.txt     ← pytest, pytest-cov
-  pytest.ini               ← pytest config (testpaths=tests)
-  tests/                   ← pytest suite — see ARCHITECTURE.md → Testing
-    conftest.py            ← fake_project fixture (re-points PROJECT_ROOT)
-    test_task_io.py        ← frontmatter, mark_processing, safe_read_context
-    test_rag_tool.py       ← graceful-degradation matrix
-    test_rag_injection.py  ← pre-prompt injection helper (M2)
-    test_agent_error_handling.py ← static AST checks for M3 patterns
-    test_config.py         ← ProjectConfig accessors + JSON loader
-    test_logger.py         ← AgentLogger levels, UTF-8, append
-    test_token_logger.py   ← tokens.jsonl, task-ID filter
-    test_ollama_client.py  ← chat()/chat_with_tools() with mocked Ollama
-    test_orchestrator_helpers.py ← QA chain discovery, verdict extraction
-    test_dashboard_token.py ← H2 token guard on state-changing endpoints
-    test_validation_context_propagation.py ← M4 helper + QA injection guard
+  requirements.txt / requirements.lock   ← pinned deps + transitive closure
+  requirements-dev.txt                   ← pytest, pytest-cov
+  pytest.ini
+  tests/
+    conftest.py                          ← fake_project fixture, sample_task_meta
+    test_task_io.py                      ← frontmatter round-trip, mark_processing, safe_read_context
+    test_rag_tool.py                     ← graceful-degradation across all failure modes
+    test_rag_injection.py                ← pre-prompt injection helper
+    test_agent_error_handling.py         ← static AST checks: pre-flight, OllamaError, outer loop guard
+    test_config.py                       ← ProjectConfig accessors + JSON loader
+    test_logger.py                       ← AgentLogger levels, UTC timestamps, UTF-8
+    test_token_logger.py                 ← tokens.jsonl output, task-ID filter
+    test_ollama_client.py                ← chat() + chat_with_tools() with mocked Ollama
+    test_orchestrator_helpers.py         ← QA chain discovery, verdict extraction
+    test_agent_boilerplate.py            ← build_user_message parity matrix, log_tokens_safe
+    test_dashboard_token.py              ← X-Dashboard-Token guard on state-changing endpoints
+    test_task_monitor.py                 ← YAML frontmatter parser, approve/reject flows
+    test_validation_context_propagation.py ← prepend_validation_context, QA injection guard
   inbox/                   ← drop .task.md files here to submit work
   processing/              ← parent tasks held during validation loop (+ orchestrator.lock)
-  validation/              ← completed subtasks awaiting orchestrator approval
-  outbox/                  ← approved & completed results
+  validation/              ← completed subtasks awaiting orchestrator review
+  outbox/                  ← completed results
   failed/                  ← QA failure reports + hard-errored tasks
-  context/                 ← optional shared context files for tasks
-  rag_api/                 ← Local knowledge base (FastAPI + ChromaDB)
-    main.py                ← FastAPI app; endpoints: /health /ingest /query /documents
-    config.py              ← Settings class reads rag_api/config.json; _KNOWN_KEYS guards against typos
-    ollama_client.py       ← OllamaClient: embed() via /api/embeddings; rerank() via cosine sim
-    vector_store.py        ← ChromaDBPersistentClient wrapper
+  context/                 ← optional shared context files
+  rag_api/
+    main.py                ← FastAPI: /health /ingest /query /documents /documents/<id>
+    config.py              ← plain Settings class; _KNOWN_KEYS warns on config typos
+    ollama_client.py       ← embed() via /api/embeddings; rerank() via cosine similarity
+    vector_store.py        ← ChromaDB wrapper (get()→flat lists, query()→nested lists)
     ingestion.py           ← TextChunker + DocumentLoader
-    models.py              ← Pydantic v2 request/response models
-    requirements.txt       ← fastapi, uvicorn, chromadb, pydantic, requests
-    chroma_db/             ← ChromaDB persistent storage (auto-created)
+    models.py              ← Pydantic v2 models
+    requirements.txt
+    chroma_db/             ← persistent vector store (auto-created)
   agents/
     orchestrator/
       system_prompt.md             ← decomposition & routing prompt
       validation_system_prompt.md  ← validation decision prompt
-    coder/
-      inbox/
-      system_prompt.md
-    research/
-      inbox/
-      system_prompt.md
+    coder/inbox/ + system_prompt.md
+    research/inbox/ + system_prompt.md
     claude-code/
-      inbox/              ← approved tasks (ready to run)
-      pending/            ← tasks awaiting manual approval
-    qa/
-      inbox/
-      system_prompt.md
+      inbox/              ← approved tasks ready to run
+      pending/            ← awaiting manual approval
+    qa/inbox/ + system_prompt.md
   dashboard/
-    app.py / run_dashboard.py / task_monitor.py
+    app.py                ← Flask REST API + @_json_error_envelope on all endpoints
+    run_dashboard.py      ← launcher
+    task_monitor.py       ← filesystem scanner; yaml.safe_load for frontmatter
+    agent_chat.py         ← chat LLM tool loop (rag_query, web_search, web_fetch; max 8 turns)
+    chat_context.py       ← pipeline snapshot + deep task context injector
+    chat_session.py       ← in-memory UUID-keyed sessions (max 20 history turns)
+    chat_system_prompt.md
     templates/index.html
     static/dashboard.js / dashboard.css
-  logs/                   ← per-agent logs at logs/<agent>/general.log
+  logs/                   ← logs/<agent>/general.log + tokens.jsonl
   scripts/
     shared/
       task_io.py          ← task file I/O, dependency resolution, validation grouping
-      ollama_client.py    ← Ollama REST wrapper (chat + chat_with_tools); stores last_token_counts
-      token_logger.py     ← appends per-call token usage to logs/<agent>/tokens.jsonl
-      web_search.py       ← web_search() and web_fetch() tool wrappers
-      rag_tool.py         ← rag_query(query, top_k) → str tool wrapper for the RAG API
-      rag_injection.py    ← inject_rag_context() — pre-prompt RAG for non-tool-loop agents
-      logger.py           ← UTC-correct logger
-      config.py           ← config.json loader (includes rag_api_url() method)
-    agent_orchestrator.py
+      ollama_client.py    ← chat() + chat_with_tools(); sets OLLAMA_API_KEY at import time
+      token_logger.py     ← appends {ts, task_id, prompt, completion} to tokens.jsonl
+      web_search.py       ← web_search() + web_fetch() wrappers (ollama Python library)
+      rag_tool.py         ← rag_query(query, top_k) → str; graceful fallback on unavailability
+      rag_injection.py    ← inject_rag_context() — pre-prompt RAG for coder + orchestrator
+      agent_boilerplate.py ← load_system_prompt, build_user_message (3 styles), log_tokens_safe
+      validation_context.py ← prepend_validation_context() — ## Validation Context blocks
+      file_watcher.py     ← TaskWatcher: watchdog-based immediate agent triggering
+      logger.py           ← UTC-correct file + stdout logger
+      config.py           ← ProjectConfig: loads config.json, exposes typed accessors
+    agent_orchestrator.py ← thin entrypoint; delegates to orchestration/ package
     agent_coder.py
     agent_research.py
     agent_claude_code.py
     agent_qa.py
     scheduler.py
+    orchestration/
+      decompose.py        ← decomposition LLM + redecompose_after_research
+      validate.py         ← Phase 1: validation loop + QA gate
+      dispatch.py         ← Phase 3: task routing + subtask creation
+      recovery.py         ← four startup orphan/stall recovery functions
+      qa_chain.py         ← _find_qa_for_coder_subtask, _find_retry_coder_output, _extract_qa_verdict
+      parsing.py          ← LLM response parsing helpers
 ```
+
+---
 
 ## Running the System
 
@@ -157,29 +181,27 @@ AI Team/
 RUN_SCHEDULER.bat        (Windows)
 RUN_SCHEDULER.sh         (Linux/Mac)
 ```
-Or manually: `python scripts/scheduler.py`
+Or: `python scripts/scheduler.py`
 
-The scheduler automatically starts the RAG API (`uvicorn` at `http://localhost:8000`) and keeps it alive. Logs: `logs/scheduler/general.log` and `logs/<agent>/general.log`. Press Ctrl+C to stop all agents and the RAG API.
+The scheduler starts and monitors the RAG API automatically. Press Ctrl+C to stop everything.
 
-**RAG API prerequisites** (first time only):
+**First-time RAG API setup:**
 ```bash
-cd rag_api
-pip install -r requirements.txt
+cd rag_api && pip install -r requirements.txt
 ```
-
-**Dependency upgrades.** Direct deps in `requirements.txt` / `rag_api/requirements.txt` are pinned to `==<version>`. The matching `.lock` files capture the full transitive closure resolved on the dev machine and are the authoritative install source for reproducible environments — `pip install -r requirements.lock`. To upgrade: bump the version in `requirements.txt`, `pip install -r requirements.txt --upgrade`, then `python scripts/_gen_locks.py` to refresh both `.lock` files, run the test suite, and commit.
 
 **Terminal 2 — Dashboard (optional):**
 ```bash
-python dashboard/run_dashboard.py
+python dashboard/run_dashboard.py   # http://localhost:5000
 ```
-Open `http://localhost:5000`. Runs independently of the scheduler. The **Knowledge Base** tab lets you add, view, and delete documents from the RAG API without touching the filesystem.
+
+---
 
 ## Submitting a Task
 
-**Easiest:** use the dashboard **Submit Task** tab at `http://localhost:5000` — fill in type, priority, description, and optional expected output, then click Submit.
+**Via dashboard:** `http://localhost:5000` → **Submit Task** tab.
 
-**Programmatically:** drop a `.task.md` file in `inbox/`:
+**Via file drop** — write a `.task.md` to `inbox/`:
 
 ```markdown
 ---
@@ -201,20 +223,22 @@ Write a Python function that ...
 A working Python file with ...
 ```
 
-The orchestrator picks it up within 1 minute, decomposes it, and routes subtasks to workers.
+The orchestrator picks it up immediately (file watcher) or within the timer interval, decomposes it, and routes subtasks to workers.
+
+---
 
 ## Monitoring
 
-- **Dashboard:** `http://localhost:5000` — real-time task status, agent stats, live logs, approve/reject claude-code tasks
-- **Task flow:** `inbox/` → `processing/` → workers → `validation/` → `outbox/` (or `failed/`)
+- **Dashboard:** `http://localhost:5000` — task status, agent stats, logs, claude-code approvals
+- **Task flow:** `inbox/` → `processing/` → `agents/*/inbox/` → `validation/` → `outbox/` (or `failed/`)
 - **Logs:** `logs/<agent>/general.log` | token usage: `logs/<agent>/tokens.jsonl`
-- **Pending claude-code tasks:** appear in the dashboard **Approvals** tab with Approve / Reject buttons; or manually move from `agents/claude-code/pending/` to `agents/claude-code/inbox/`
+- **Claude-code approvals:** dashboard **Approvals** tab, or manually move files from `agents/claude-code/pending/` → `agents/claude-code/inbox/`
+
+---
 
 ## Potential Extensions
 
-1. **Parent-child UI** — dashboard currently shows a flat task list; hierarchy view would help track validation iterations
-2. **Worker-initiated research** — allow coder/QA to drop tasks in `research/inbox/` mid-execution and yield until resolved
-3. **Webhooks** — notify when tasks complete
-4. **File watcher** — replace polling with `inotify`/`watchman` for lower latency
-5. **RAG auto-ingestion** — automatically ingest completed task results and context files into the knowledge base so agents accumulate project knowledge over time without manual uploads
-6. **RAG dashboard search** — add a query box to the Knowledge Base tab so João can search the vector store from the browser
+1. **Worker-initiated research** — allow coder/QA to drop tasks in `research/inbox/` mid-execution and yield until resolved
+2. **Webhooks** — notify external systems when tasks complete
+3. **RAG auto-ingestion** — automatically ingest completed task results into the knowledge base
+4. **RAG dashboard search** — query box in the Knowledge Base tab for ad-hoc vector searches

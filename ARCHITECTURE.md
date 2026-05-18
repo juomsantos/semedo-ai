@@ -160,6 +160,7 @@ AI Team/
     test_token_logger.py       ← tokens.jsonl output, task-ID format filter
     test_ollama_client.py      ← chat() and chat_with_tools() with mocked Ollama
     test_orchestrator_helpers.py ← QA chain discovery and verdict extraction
+    test_agent_boilerplate.py  ← M6 build_user_message parity matrix, load_system_prompt, log_tokens_safe
     test_task_monitor.py       ← dashboard's frontmatter parser + approve/reject flows
   pytest.ini                   ← pytest config (testpaths, addopts, filterwarnings)
   requirements-dev.txt         ← pytest, pytest-cov
@@ -171,15 +172,24 @@ AI Team/
       web_search.py            ← web_search() and web_fetch() wrappers (ollama Python library)
       rag_tool.py              ← rag_query(query, top_k) → str; POST /query to RAG API; graceful fallback
       rag_injection.py         ← inject_rag_context() — pre-prompt RAG for agents without a tool loop (coder, orchestrator)
+      agent_boilerplate.py     ← M6: load_system_prompt, build_user_message (coder/research/claude-code styles), log_tokens_safe
+      validation_context.py    ← prepend_validation_context() — single source of truth for ## Validation Context blocks (M4)
       file_watcher.py          ← TaskWatcher: watchdog-based file event monitoring for immediate triggering
       logger.py                ← file + stdout logging, UTC timestamps
       config.py                ← config.json loader (ProjectConfig class, includes rag_api_url())
-    agent_orchestrator.py      ← 3-phase loop: validate, resolve deps, dispatch; RAG pre-prompt injection
-    agent_coder.py             ← RAG pre-prompt injection before user_message construction
+    agent_orchestrator.py      ← thin entrypoint; all logic delegated to orchestration/ package (M1)
+    agent_coder.py             ← uses agent_boilerplate.build_user_message(style="coder") with RAG injection
     agent_research.py          ← rag_query in TOOLS list (up to 5 RAG calls per task)
-    agent_claude_code.py       ← Claude CLI subprocess wrapper with pipeline preamble
+    agent_claude_code.py       ← Claude CLI subprocess wrapper with pipeline preamble; word-count token proxy
     agent_qa.py                ← rag_query in QA_TOOLS list (up to 5 RAG calls per task)
     scheduler.py               ← cross-platform scheduler: file watcher + optional timer + RAG API lifecycle
+    orchestration/             ← M1: orchestrator split into focused modules
+      decompose.py             ← decomposition LLM call + redecompose_after_research path
+      validate.py              ← Phase 1 validation loop + QA gate logic
+      dispatch.py              ← Phase 3 task routing and subtask creation
+      recovery.py              ← four orphan/stall recovery functions (run at startup)
+      qa_chain.py              ← QA gate helpers: _find_qa_for_coder_subtask, _find_retry_coder_output, _extract_qa_verdict
+      parsing.py               ← LLM response parsing helpers
 ```
 
 ---
@@ -454,6 +464,8 @@ python dashboard/run_dashboard.py --port 8080 --debug
 
 ### REST API
 
+All endpoints are wrapped with a `@_json_error_envelope` decorator (N7): unhandled exceptions return a JSON `{"error": "..."}` body with an appropriate HTTP status code rather than an HTML 500 page.
+
 | Endpoint | Description |
 |---|---|
 | `GET /api/status` | System metrics (pending / processing / completed / failed / awaiting_approval counts) |
@@ -582,7 +594,7 @@ After every successful Ollama call, each agent appends token usage to `logs/<age
 {"ts": "2026-05-07T10:00:01Z", "task_id": "task_20260507_...", "prompt": 312, "completion": 87}
 ```
 
-The log is append-only and accumulates across all runs. The dashboard **Agent Stats** tab reads these files and displays cumulative `Prompt Tokens`, `Completion Tokens`, and `LLM Calls` per agent. The `claude-code` worker always shows `—` (no Ollama calls).
+The log is append-only and accumulates across all runs. The dashboard **Agent Stats** tab reads these files and displays cumulative `Prompt Tokens`, `Completion Tokens`, and `LLM Calls` per agent. The `claude-code` worker logs an approximate completion count via word-count proxy (`len(response.split())`) and `0` for prompt tokens — the Claude CLI does not report token counts. This is a known approximation (M7); the dashboard displays whatever value is in the JSONL file.
 
 ---
 
@@ -596,7 +608,7 @@ running Ollama server or RAG API.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                              # all tests (≈130, <2s)
+pytest                                              # all tests (<2s)
 pytest --cov=shared --cov=agent_orchestrator        # with coverage
 pytest -k safe_read_context                         # filter by name
 ```
@@ -624,6 +636,7 @@ filterwarnings = ignore::DeprecationWarning:frontmatter
 | `test_token_logger.py` | `shared/token_logger.py` | JSONL output, task-ID regex filter rejects test/dev IDs, agent dir creation |
 | `test_ollama_client.py` | `shared/ollama_client.py` | `chat()` + `chat_with_tools()` with the inner `_ollama.Client` mocked; error mapping (`ResponseError`, connection-error message → "Cannot connect", timeout → "timed out"); tool-call argument decoding (dict, JSON string, malformed) |
 | `test_orchestrator_helpers.py` | `agent_orchestrator.py` | `_find_qa_for_output` across in-flight + done dirs; `_find_retry_coder_output` timestamp guard and failed-sentinel; `_extract_qa_verdict` PASS/FAIL/UNKNOWN paths |
+| `test_agent_boilerplate.py` | `shared/agent_boilerplate.py` | `build_user_message` parity matrix for all three styles (coder/research/claude-code) — verifies byte-identical output to original per-agent inline code; `load_system_prompt` round-trip; `log_tokens_safe` with OllamaClient and word-count fallback paths |
 | `test_task_monitor.py` | `dashboard/task_monitor.py` | `_parse_yaml_frontmatter` correctness across Windows paths, lists, nested dicts, colons-in-values, comments; end-to-end `get_pending_approvals` / `approve_task` / `reject_task` with all frontmatter fields preserved |
 
 ### Fixtures (`tests/conftest.py`)
