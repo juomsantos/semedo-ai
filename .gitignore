@@ -11,6 +11,7 @@ processing/
 outbox/
 failed/
 validation/
+outputs/
 
 # Chroma DB files
 rag_api/chroma_db/*

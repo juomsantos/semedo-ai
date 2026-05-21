@@ -88,6 +88,20 @@ def _is_safe_output_path(rel_path: str) -> bool:
     return ".." not in p.parts
 
 
+def _normalise_path(p: str) -> str:
+    """Normalise a relative file path for comparison.
+
+    Strips leading ``./``, collapses backslashes to forward slashes, and
+    strips surrounding whitespace so that paths from coder bold-headers
+    (``src/foo.py``) compare correctly against LLM manifest entries that
+    may use different conventions (``./src/foo.py``, ``src\\foo.py``).
+    """
+    p = p.strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
 def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, client: OllamaClient, log: AgentLogger):
     """
     Call orchestrator LLM to validate completed subtasks.
@@ -240,7 +254,9 @@ Evaluate these results and decide if the work is complete. You have {MAX_ITERATI
         f"{response[:500]}\n\n"
         "Respond again with ONLY a raw JSON object. No prose, no fences.\n"
         'Required schema: {"decision": "complete|refine|additional_work|redo", '
-        '"reasoning": "...", "follow_ups": [...]}  (follow_ups only when decision != complete)\n'
+        '"reasoning": "...", "follow_ups": [...], "files": ["path/to/file.ext", ...]}'
+        "  (follow_ups only when decision != complete; "
+        "files is the list of all output file paths, required when decision == complete and code was produced)\n"
         "Escape any newlines inside string values as \\n."
     )
     # Run the repair call in a daemon thread so t.join(timeout=N) returns
@@ -460,9 +476,27 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
                 # Join all sections with a visible horizontal rule separator
                 result_content += "\n\n---".join(sections)
 
-                # Write named files from coder outputs to outputs/<parent_task_id>/
-                # Retry coders (created_by="qa") supersede their originals; the link
-                # is context_files[0] == original coder's output_path.
+                # Write named files from coder outputs to outputs/<parent_task_id>/.
+                #
+                # Three-step extraction:
+                #
+                # Pass 1 — non-superseded (passing) coders.
+                #   Retry coders (created_by="qa") supersede their originals via
+                #   context_files[0] == original.output_path.  We skip superseded
+                #   coders here so a buggy original never overwrites a fixed retry.
+                #   Paths written here are added to extracted_paths.
+                #
+                # Pass 2 — gap-fill from superseded coders.
+                #   A refine/additional_work coder may only re-emit the files it
+                #   touched, leaving the original's other files unwritten.  For any
+                #   path NOT already in extracted_paths, we fall back to the
+                #   superseded coder — the path was never the subject of a QA
+                #   failure so treating it as tainted would silently drop it.
+                #
+                # Pass 3 — LLM manifest check.
+                #   The validation LLM declares the canonical file set in `files`.
+                #   Any path declared but not found after passes 1+2 gets a warning
+                #   so the gap is surfaced rather than silently ignored.
                 try:
                     superseded_outputs: set[str] = set()
                     for s in code_subtasks:
@@ -472,6 +506,19 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
                                 superseded_outputs.add(cf[0])
 
                     outputs_dir = _task_io.PROJECT_ROOT / "outputs" / parent_task_id
+                    # Track normalised paths written so far (for gap-fill and manifest check).
+                    extracted_paths: set[str] = set()
+
+                    # Build the LLM manifest whitelist upfront.  When non-empty this is
+                    # authoritative: only paths declared here are written to disk.
+                    # An absent/empty manifest (pure-research tasks, or the LLM omitting
+                    # the field) disables filtering for backward compatibility.
+                    manifest_norms: set[str] = set()
+                    for raw_path in (decision.get("files") or []):
+                        if isinstance(raw_path, str) and raw_path.strip():
+                            manifest_norms.add(_normalise_path(raw_path))
+
+                    # --- Pass 1: non-superseded coders ---
                     for coder in code_subtasks:
                         coder_result_path = coder["meta"].get("output_path", "")
                         if coder_result_path in superseded_outputs:
@@ -480,13 +527,58 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
                             continue
                         coder_body = read_task(coder_result_path)["body"]
                         for rel_path, content in _extract_named_files(coder_body):
+                            norm = _normalise_path(rel_path)
                             if not _is_safe_output_path(rel_path):
                                 log.warning(f"Skipping unsafe output path: {rel_path!r}")
+                                continue
+                            if manifest_norms and norm not in manifest_norms:
+                                log.warning(
+                                    f"File found in coder output but not declared in LLM manifest "
+                                    f"— skipping: {rel_path!r} (parent {parent_task_id})"
+                                )
                                 continue
                             dest = outputs_dir / rel_path
                             dest.parent.mkdir(parents=True, exist_ok=True)
                             dest.write_text(content, encoding="utf-8")
+                            extracted_paths.add(norm)
                             log.info(f"Extracted file → outputs/{parent_task_id}/{rel_path}")
+
+                    # --- Pass 2: gap-fill from superseded coders ---
+                    for coder in code_subtasks:
+                        coder_result_path = coder["meta"].get("output_path", "")
+                        if coder_result_path not in superseded_outputs:
+                            continue
+                        if not Path(coder_result_path).exists():
+                            continue
+                        coder_body = read_task(coder_result_path)["body"]
+                        for rel_path, content in _extract_named_files(coder_body):
+                            norm = _normalise_path(rel_path)
+                            if norm in extracted_paths:
+                                continue  # already covered by a validated coder
+                            if not _is_safe_output_path(rel_path):
+                                log.warning(f"Skipping unsafe output path: {rel_path!r}")
+                                continue
+                            if manifest_norms and norm not in manifest_norms:
+                                log.warning(
+                                    f"Gap-fill file found in superseded coder output but not declared "
+                                    f"in LLM manifest — skipping: {rel_path!r} (parent {parent_task_id})"
+                                )
+                                continue
+                            dest = outputs_dir / rel_path
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            dest.write_text(content, encoding="utf-8")
+                            extracted_paths.add(norm)
+                            log.info(f"Gap-fill from superseded coder → outputs/{parent_task_id}/{rel_path}")
+
+                    # --- Pass 3: LLM manifest check (both directions) ---
+                    # Any manifest path not written to disk is a gap — warn so it's surfaced.
+                    for norm in manifest_norms:
+                        if norm not in extracted_paths:
+                            log.warning(
+                                f"Manifest file declared by LLM but not found in any "
+                                f"coder output: {norm!r} (parent {parent_task_id})"
+                            )
+
                 except Exception as e:
                     log.error(f"File extraction failed for {parent_task_id}: {e}")
 
