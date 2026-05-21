@@ -2,6 +2,8 @@
 
 import time
 import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
@@ -31,6 +33,22 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
+
+_log_dir = Path(__file__).resolve().parents[1] / "logs" / "rag-api"
+_log_dir.mkdir(parents=True, exist_ok=True)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # uvicorn calls logging.config.dictConfig() during its own startup, wiping
+    # any handlers added at module level. Attaching here runs after that setup.
+    _fh = logging.FileHandler(_log_dir / "general.log", encoding="utf-8")
+    _fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logging.getLogger().addHandler(_fh)
+    for _name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        logging.getLogger(_name).addHandler(_fh)
+    yield
+    _fh.close()
 
 # ---------------------------------------------------------------------------
 # Startup: load settings and wire components
@@ -64,6 +82,7 @@ app = FastAPI(
     title="RAG API",
     description="Retrieval-Augmented Generation API",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 # CORS is intentionally restricted to loopback origins.
