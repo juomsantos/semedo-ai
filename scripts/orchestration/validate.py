@@ -3,9 +3,15 @@ Validation phase: review completed subtask results and decide what's next.
 
 - ``validate_completed_tasks`` — calls the orchestrator LLM with the parent
   task + all its completed subtask results and parses the validation decision
-  (``complete`` / ``refine`` / ``additional_work`` / ``redo``). Retries the
-  LLM call once if the response isn't valid JSON, then gives up with the
-  ``_VALIDATION_PARSE_FAILED`` sentinel.
+  (``complete`` / ``refine`` / ``additional_work`` / ``redo``). If the
+  response isn't valid JSON, a single repair attempt is made: the full
+  original context (parent + subtask results) is re-sent together with a
+  parse-failure note. The repair call runs on a daemon thread with a hard
+  300-second wall-clock ceiling (``threading.Thread`` + ``t.join(timeout=300)``
+  — NOT ``ThreadPoolExecutor``, whose ``shutdown(wait=True)`` blocks
+  indefinitely on context-manager exit). If the repair thread is still alive
+  after 300s, ``_VALIDATION_PARSE_FAILED`` is returned and the caller moves
+  the parent to ``failed/``.
 - ``handle_validation_decision`` — routes the decision: marks the parent
   complete + sweeps subtasks to outbox/, or dispatches follow-ups for the
   next iteration.
@@ -14,6 +20,7 @@ Validation phase: review completed subtask results and decide what's next.
 """
 
 import json
+import threading
 from pathlib import Path
 
 import shared.task_io as _task_io
@@ -190,23 +197,64 @@ Evaluate these results and decide if the work is complete. You have {MAX_ITERATI
         )
         log.warning(f"Raw response (first 500 chars): {response[:500]}")
 
-    # --- Retry: ask the LLM to emit only valid JSON ---
-    repair_prompt = (
-        "Your previous response could not be parsed as valid JSON.\n\n"
-        "Original response:\n"
-        f"{response[:2000]}\n\n"
-        "Output ONLY a valid JSON object — no prose, no code fences, no extra fields.\n"
+    # --- Retry: full context + formatting correction, hard wall-clock timeout ---
+    # Re-send the complete original user_message so the model still has all
+    # subtask results to reason over, then append the formatting correction.
+    # Without the original context the model has nothing to base its decision
+    # on and tends to hallucinate or stall with extended thinking.
+    REPAIR_TIMEOUT_SECONDS = 300
+    repair_user_message = (
+        f"{user_message}\n\n"
+        "---\n"
+        "Your previous response was not valid JSON. It started with:\n"
+        f"{response[:500]}\n\n"
+        "Respond again with ONLY a raw JSON object. No prose, no fences.\n"
         'Required schema: {"decision": "complete|refine|additional_work|redo", '
         '"reasoning": "...", "follow_ups": [...]}  (follow_ups only when decision != complete)\n'
         "Escape any newlines inside string values as \\n."
     )
-    try:
-        repair_response = client.chat(model=MODEL, system_prompt=validation_prompt, user_message=repair_prompt, options=OPTIONS, think=THINKING)
-        log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
-        log.info(f"Validation repair response received ({len(repair_response)} chars)")
-    except OllamaError as e:
-        log.error(f"Ollama error during validation repair of {parent_task_id}: {e}")
+    # Run the repair call in a daemon thread so t.join(timeout=N) returns
+    # without blocking regardless of whether the Ollama call is still streaming.
+    # Daemon threads are automatically abandoned when the main thread exits —
+    # they never prevent process shutdown, unlike ThreadPoolExecutor which calls
+    # shutdown(wait=True) on context-manager exit and blocks until the thread
+    # finishes even after a timeout fires.
+    _repair_result: list = [None]   # [response_str] on success
+    _repair_exc:    list = [None]   # [exception]    on failure
+
+    def _run_repair():
+        try:
+            _repair_result[0] = client.chat(
+                model=MODEL,
+                system_prompt=validation_prompt,
+                user_message=repair_user_message,
+                options=OPTIONS,
+                think=THINKING,
+            )
+        except Exception as exc:  # catches OllamaError and anything else
+            _repair_exc[0] = exc
+
+    _t = threading.Thread(target=_run_repair, daemon=True)
+    _t.start()
+    _t.join(timeout=REPAIR_TIMEOUT_SECONDS)
+
+    if _t.is_alive():
+        # Thread still running — hard wall-clock ceiling hit
+        log.error(
+            f"Repair LLM call exceeded {REPAIR_TIMEOUT_SECONDS}s for {parent_task_id} — giving up"
+        )
         return _VALIDATION_PARSE_FAILED
+
+    if _repair_exc[0] is not None:
+        if isinstance(_repair_exc[0], OllamaError):
+            log.error(f"Ollama error during validation repair of {parent_task_id}: {_repair_exc[0]}")
+        else:
+            log.error(f"Unexpected error during validation repair of {parent_task_id}: {_repair_exc[0]}")
+        return _VALIDATION_PARSE_FAILED
+
+    repair_response = _repair_result[0]
+    log_tokens(AGENT_NAME, parent_task_id, client.last_token_counts["prompt"], client.last_token_counts["completion"])
+    log.info(f"Validation repair response received ({len(repair_response)} chars)")
 
     try:
         decision = parse_validation_decision(repair_response)
@@ -413,45 +461,4 @@ def validation_phase(client: OllamaClient, log: AgentLogger):
     log.info(f"Found {len(grouped)} parent task(s) with completed subtasks awaiting validation")
 
     for parent_task_id, completed_subtasks in grouped.items():
-        log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
-
-        # Check for research-first re-decomposition before anything else.
-        # If the parent was flagged with redecompose_after_research, skip normal validation
-        # and re-run the decomposition prompt with the research outputs in context.
-        parent_path = _task_io.PROJECT_ROOT / "processing" / f"{parent_task_id}.task.md"
-        if parent_path.exists():
-            try:
-                parent_meta = read_task(parent_path)["meta"]
-                if parent_meta.get("redecompose_after_research"):
-                    log.info(f"Parent {parent_task_id} has redecompose_after_research flag — re-decomposing")
-                    redecompose_with_research(parent_task_id, completed_subtasks, client, log)
-                    continue
-            except Exception as e:
-                log.error(f"Failed to read parent task {parent_task_id} for redecompose check: {e}")
-
-        # Gate: if any code subtask is still waiting for QA, skip this parent for now.
-        qa_still_running = False
-        for subtask in completed_subtasks:
-            if subtask["meta"].get("chain_to") == "qa" or subtask["meta"].get("type") == "code":
-                qa_status, _ = _find_qa_for_coder_subtask(subtask)
-                if qa_status in ("pending", "not_found"):
-                    log.info(
-                        f"Skipping validation for parent {parent_task_id} — "
-                        f"QA not yet complete for coder subtask {subtask['meta'].get('id')} "
-                        f"(qa_status={qa_status})"
-                    )
-                    qa_still_running = True
-                    break
-        if qa_still_running:
-            continue
-
-        decision = validate_completed_tasks(parent_task_id, completed_subtasks, client, log)
-        if decision is _VALIDATION_PARSE_FAILED:
-            log.error(
-                f"Validation LLM returned unparseable JSON twice for {parent_task_id} — failing task"
-            )
-            parent_path = _task_io.PROJECT_ROOT / "processing" / f"{parent_task_id}.task.md"
-            if parent_path.exists():
-                mark_failed(parent_path, _task_io.PROJECT_ROOT / "failed")
-        elif decision:
-            handle_validation_decision(parent_task_id, decision, client, log)
+        log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
