@@ -787,7 +787,8 @@ function renderTaskWithChildren(task, depth = 0) {
 
     // Body preview line
     if (task.body_preview) {
-        html += `<div class="task-desc">${escapeHtml(task.body_preview.slice(0, 140))}</div>`;
+        let preview = task.body_preview.replace(/^##\s+Task Description\n/, '').trim();
+        html += `<div class="task-desc">${escapeHtml(preview.slice(0, 140))}</div>`;
     }
 
     html += `
@@ -924,6 +925,15 @@ async function showTaskDetail(taskId) {
             `;
         }
 
+        if (task.result) {
+            html += `
+                <div class="detail-section">
+                    <h4>Result</h4>
+                    <pre class="detail-result">${escapeHtml(task.result)}</pre>
+                </div>
+            `;
+        }
+
         if (task.logs && task.logs.length > 0) {
             html += `
                 <div class="detail-section">
@@ -938,15 +948,6 @@ async function showTaskDetail(taskId) {
                             </div>
                         `).join('')}
                     </div>
-                </div>
-            `;
-        }
-
-        if (task.result) {
-            html += `
-                <div class="detail-section">
-                    <h4>Result</h4>
-                    <pre class="detail-result">${escapeHtml(task.result)}</pre>
                 </div>
             `;
         }
