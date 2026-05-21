@@ -20,6 +20,7 @@ Validation phase: review completed subtask results and decide what's next.
 """
 
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -57,6 +58,34 @@ MAX_ITERATIONS = 5
 # Sentinel: validation LLM emitted unparseable JSON twice in a row. Bubbled
 # up so the main loop can move the parent to failed/ rather than spin forever.
 _VALIDATION_PARSE_FAILED = object()
+
+
+def _extract_named_files(body: str) -> list[tuple[str, str]]:
+    """Parse coder output for explicitly named file blocks.
+
+    Matches the format the coder system prompt mandates for multi-file output:
+        **path/to/file.py**
+        ```python
+        <content>
+        ```
+    Returns (relative_path, file_content) pairs. Single-file outputs with no
+    path header produce an empty list.
+    """
+    pattern = re.compile(
+        r'^\*\*([^\*\n]+)\*\*[ \t]*\n```[^\n]*\n(.*?)^```[ \t]*$',
+        re.MULTILINE | re.DOTALL,
+    )
+    return [(m.group(1).strip(), m.group(2)) for m in pattern.finditer(body)]
+
+
+def _is_safe_output_path(rel_path: str) -> bool:
+    """Reject absolute paths and directory-traversal attempts."""
+    p = Path(rel_path)
+    # p.is_absolute() misses POSIX-style "/..." on Windows (no drive letter),
+    # so also check the raw string for a leading slash.
+    if p.is_absolute() or rel_path.startswith("/") or rel_path.startswith("\\"):
+        return False
+    return ".." not in p.parts
 
 
 def validate_completed_tasks(parent_task_id: str, completed_subtasks: list, client: OllamaClient, log: AgentLogger):
@@ -430,6 +459,36 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
 
                 # Join all sections with a visible horizontal rule separator
                 result_content += "\n\n---".join(sections)
+
+                # Write named files from coder outputs to outputs/<parent_task_id>/
+                # Retry coders (created_by="qa") supersede their originals; the link
+                # is context_files[0] == original coder's output_path.
+                try:
+                    superseded_outputs: set[str] = set()
+                    for s in code_subtasks:
+                        if s["meta"].get("created_by") == "qa":
+                            cf = s["meta"].get("context_files") or []
+                            if cf:
+                                superseded_outputs.add(cf[0])
+
+                    outputs_dir = _task_io.PROJECT_ROOT / "outputs" / parent_task_id
+                    for coder in code_subtasks:
+                        coder_result_path = coder["meta"].get("output_path", "")
+                        if coder_result_path in superseded_outputs:
+                            continue
+                        if not coder_result_path or not Path(coder_result_path).exists():
+                            continue
+                        coder_body = read_task(coder_result_path)["body"]
+                        for rel_path, content in _extract_named_files(coder_body):
+                            if not _is_safe_output_path(rel_path):
+                                log.warning(f"Skipping unsafe output path: {rel_path!r}")
+                                continue
+                            dest = outputs_dir / rel_path
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            dest.write_text(content, encoding="utf-8")
+                            log.info(f"Extracted file → outputs/{parent_task_id}/{rel_path}")
+                except Exception as e:
+                    log.error(f"File extraction failed for {parent_task_id}: {e}")
 
             output_path = str(outbox_dir / f"{parent_task_id}_result.md")
             write_result(output_path, result_content, meta={"task_id": parent_task_id, "status": "complete"})
