@@ -60,6 +60,7 @@ VALIDATION_PROMPT_PATH = PROJECT_ROOT / "agents" / "orchestrator" / "validation_
 WORKER_INBOXES = {
     "coder": PROJECT_ROOT / "agents" / "coder" / "inbox",
     "research": PROJECT_ROOT / "agents" / "research" / "inbox",
+    "qa": PROJECT_ROOT / "agents" / "qa" / "inbox",
     "claude-code": PROJECT_ROOT / "agents" / "claude-code" / "inbox",
     "pending_approval": PROJECT_ROOT / "agents" / "claude-code" / "pending",
 }

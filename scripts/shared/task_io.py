@@ -113,7 +113,7 @@ def mark_processing(task_path):
     if content.startswith("---"):
         parts = content.split("---", 2)
         if len(parts) >= 3:
-            new_fm = re.sub(r"^status:.*", "status: processing", parts[1], flags=re.MULTILINE)
+            new_fm = re.sub(r"^status:.*", "status: processing", parts[1], count=1, flags=re.MULTILINE)
             if "status:" not in new_fm:
                 new_fm = new_fm.rstrip("\n") + "\nstatus: processing\n"
             content = f"---{new_fm}---{parts[2]}"
@@ -128,7 +128,7 @@ def mark_awaiting_validation(task_path):
     if content.startswith("---"):
         parts = content.split("---", 2)
         if len(parts) >= 3:
-            new_fm = re.sub(r"^status:.*", "status: awaiting_validation", parts[1], flags=re.MULTILINE)
+            new_fm = re.sub(r"^status:.*", "status: awaiting_validation", parts[1], count=1, flags=re.MULTILINE)
             if "status:" not in new_fm:
                 new_fm = new_fm.rstrip("\n") + "\nstatus: awaiting_validation\n"
             content = f"---{new_fm}---{parts[2]}"
@@ -305,4 +305,4 @@ def resolve_task_dependencies(inboxes_dict: dict) -> None:
                 ))
                 del task["meta"]["depends_on"]
                 body = task["body"]
-                write_result(str(task_path), body, meta=task["meta"])
+                write_result(str(task_path), body, me
