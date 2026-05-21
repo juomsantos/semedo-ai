@@ -41,6 +41,7 @@ from orchestration.parsing import parse_validation_decision
 from orchestration.qa_chain import (
     _extract_qa_verdict,
     _find_qa_for_coder_subtask,
+    _find_qa_for_output,
 )
 
 
@@ -364,40 +365,71 @@ def handle_validation_decision(parent_task_id: str, decision: dict, client: Olla
             # Add aggregated subtask results
             if subtasks_for_parent:
                 result_content += "\n\n## Subtask Results\n"
-                # Group subtasks by type for better organization
-                subtasks_by_type = {}
-                for subtask in subtasks_for_parent:
-                    task_type = subtask["meta"].get("type", "unknown")
-                    if task_type not in subtasks_by_type:
-                        subtasks_by_type[task_type] = []
-                    subtasks_by_type[task_type].append(subtask)
 
-                # Preferred order: research, code, qa, then others
-                type_order = ["research", "code", "qa"]
-                for task_type in type_order:
-                    if task_type in subtasks_by_type:
-                        for subtask in subtasks_by_type[task_type]:
-                            task_id = subtask["meta"].get("id", "unknown")
-                            output_path = subtask["meta"].get("output_path")
-                            result_content += f"\n### {task_type.capitalize()} Result (Task: {task_id})\n\n"
-                            if output_path:
-                                subtask_content = read_subtask_result(output_path)
-                                result_content += subtask_content
-                            else:
-                                result_content += "[No output path recorded for this subtask]"
+                # Helper: render one task block with a header line and its result content.
+                # extra_note (e.g. "Final Validation Outcome: PASS") appears immediately
+                # after the heading so it reads as a summary before the raw content.
+                def _render_subtask_block(subtask, extra_note=None):
+                    t_type = subtask["meta"].get("type", "unknown")
+                    t_output = subtask["meta"].get("output_path")
+                    block = f"\n\n### {t_type.capitalize()} Result\n\n"
+                    if extra_note:
+                        block += f"**{extra_note}**\n\n"
+                    block += read_subtask_result(t_output) if t_output else "[No output path recorded for this subtask]"
+                    return block
 
-                # Include other task types not in the preferred order
-                for task_type, subtasks_list in subtasks_by_type.items():
-                    if task_type not in type_order:
-                        for subtask in subtasks_list:
-                            task_id = subtask["meta"].get("id", "unknown")
-                            output_path = subtask["meta"].get("output_path")
-                            result_content += f"\n### {task_type.capitalize()} Result (Task: {task_id})\n\n"
-                            if output_path:
-                                subtask_content = read_subtask_result(output_path)
-                                result_content += subtask_content
-                            else:
-                                result_content += "[No output path recorded for this subtask]"
+                # Bucket subtasks by type. QA tasks appear inside coder pairs below,
+                # not as standalone entries, so they're excluded from the buckets.
+                research_subtasks = [s for s in subtasks_for_parent if s["meta"].get("type") == "research"]
+                code_subtasks     = [s for s in subtasks_for_parent if s["meta"].get("type") == "code"]
+                other_subtasks    = [s for s in subtasks_for_parent
+                                     if s["meta"].get("type") not in ("research", "code", "qa")]
+
+                sections = []  # list of rendered section strings to join with separators
+
+                # 1. Research results (one block per research subtask, no internal separators)
+                if research_subtasks:
+                    research_section = ""
+                    for subtask in research_subtasks:
+                        research_section += _render_subtask_block(subtask)
+                    sections.append(research_section)
+
+                # 2. Code + QA pairs, sorted by coder retry_count descending (newest iteration first)
+                if code_subtasks:
+                    # Build (coder, qa_task_or_None, retry_count) triples
+                    pairs = []
+                    for coder in code_subtasks:
+                        retry_count = coder["meta"].get("retry_count", 0)
+                        coder_output = coder["meta"].get("output_path", "")
+                        _, qa_task = _find_qa_for_output(coder_output) if coder_output else ("not_found", None)
+                        pairs.append((coder, qa_task, retry_count))
+
+                    # Highest retry_count = most recent iteration → first
+                    pairs.sort(key=lambda x: x[2], reverse=True)
+
+                    for coder, qa_task, _ in pairs:
+                        pair_block = ""
+                        # QA block first (mirrors the review-then-fix mental model)
+                        if qa_task:
+                            qa_verdict = _extract_qa_verdict(qa_task)
+                            pair_block += _render_subtask_block(qa_task)
+                        else:
+                            pair_block += "\n### Qa Result\n\n[No QA task found]\n"
+                            qa_verdict = "UNKNOWN"
+
+                        # Coder block: verdict summary appears before the raw content
+                        pair_block += _render_subtask_block(
+                            coder,
+                            extra_note=f"Final Validation Outcome: {qa_verdict}",
+                        )
+                        sections.append(pair_block)
+
+                # 3. Any remaining subtask types (e.g. claude-code tasks)
+                for subtask in other_subtasks:
+                    sections.append(_render_subtask_block(subtask))
+
+                # Join all sections with a visible horizontal rule separator
+                result_content += "\n\n---".join(sections)
 
             output_path = str(outbox_dir / f"{parent_task_id}_result.md")
             write_result(output_path, result_content, meta={"task_id": parent_task_id, "status": "complete"})

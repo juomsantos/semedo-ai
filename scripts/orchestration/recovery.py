@@ -9,6 +9,7 @@ Run order (in ``main()``):
   4. ``recover_orphaned_validation_subtasks`` — stranded validation/ subtasks → outbox/
 """
 
+import re
 import time
 from pathlib import Path
 
@@ -107,10 +108,20 @@ def recover_processing_subtasks(log: AgentLogger):
             if age_seconds < STALE_THRESHOLD_SECONDS:
                 continue  # Still within normal processing window
 
-            # Task is stale — reset and return to worker inbox
-            meta["status"] = "pending"
-            write_result(str(task_file), task["body"], meta=meta)
-            move_task(task_file, inbox)
+            # Task is stale — move to worker inbox, then patch status via regex.
+            # Regex mirrors mark_processing / mark_awaiting_validation: operates on
+            # the raw file bytes so no frontmatter round-trip can silently drop fields
+            # (e.g. Windows paths in output_path, datetime values).
+            moved_path = move_task(task_file, inbox)
+            content = moved_path.read_text(encoding="utf-8")
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    new_fm = re.sub(r"^status:.*", "status: pending", parts[1], count=1, flags=re.MULTILINE)
+                    if "status:" not in new_fm:
+                        new_fm = new_fm.rstrip("\n") + "\nstatus: pending\n"
+                    content = f"---{new_fm}---{parts[2]}"
+                    moved_path.write_text(content, encoding="utf-8")
             log.warning(
                 f"Recovered stale processing subtask {task_file.name} "
                 f"(age {int(age_seconds)}s, worker={assigned_to}) → {inbox.relative_to(_task_io.PROJECT_ROOT)}"
@@ -219,11 +230,9 @@ After {MAX_STALL_RETRIES} retries, the subtasks continue to fail. The parent tas
                     subtask_file = subtask_info["file"]
                     subtask_data = subtask_info["data"]
 
-                    # Reset subtask status to pending
-                    subtask_data["meta"]["status"] = "pending"
-                    write_result(str(subtask_file), subtask_data["body"], meta=subtask_data["meta"])
-
-                    # Get worker inbox
+                    # Resolve the worker inbox *before* touching the file. If the
+                    # worker is unknown, leave the file in failed/ untouched rather
+                    # than mutating its status and leaving it in a dirty state.
                     assigned_to = subtask_data["meta"].get("assigned_to")
                     inbox_path = WORKER_INBOXES.get(assigned_to)
 
@@ -231,8 +240,20 @@ After {MAX_STALL_RETRIES} retries, the subtasks continue to fail. The parent tas
                         log.error(f"Unknown worker '{assigned_to}' for subtask {subtask_file.name}")
                         continue
 
-                    # Move to worker inbox
-                    move_task(subtask_file, inbox_path)
+                    # Move to worker inbox, then patch status via regex.
+                    # Regex mirrors mark_processing / mark_awaiting_validation: operates on
+                    # the raw file bytes so no frontmatter round-trip can silently drop fields
+                    # (e.g. Windows paths in output_path, datetime values).
+                    moved_path = move_task(subtask_file, inbox_path)
+                    content = moved_path.read_text(encoding="utf-8")
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            new_fm = re.sub(r"^status:.*", "status: pending", parts[1], count=1, flags=re.MULTILINE)
+                            if "status:" not in new_fm:
+                                new_fm = new_fm.rstrip("\n") + "\nstatus: pending\n"
+                            content = f"---{new_fm}---{parts[2]}"
+                            moved_path.write_text(content, encoding="utf-8")
                     log.info(f"Stall recovery: retrying subtask {subtask_file.name} → {assigned_to} (attempt {stall_retry_count + 1}/{MAX_STALL_RETRIES})")
 
                 # Increment stall_retry_count on parent (only once per group, not per subtask)
