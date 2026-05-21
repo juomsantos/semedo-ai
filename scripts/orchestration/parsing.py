@@ -50,7 +50,13 @@ def parse_routing_decision(response: str) -> tuple[list[dict], bool]:
     redecompose_flag = False
     if isinstance(data, dict):
         redecompose_flag = bool(data.get("redecompose_after_research", False))
-        data = data.get("subtasks", [])
+        subtask_fields = {"worker", "type", "description", "expected_output"}
+        if not redecompose_flag and subtask_fields.issubset(data.keys()):
+            # LLM returned a bare single-subtask object instead of a one-element
+            # array — recover gracefully by wrapping it.
+            data = [data]
+        else:
+            data = data.get("subtasks", [])
 
     if not isinstance(data, list):
         raise ValueError(f"Expected JSON array, got {type(data).__name__}")

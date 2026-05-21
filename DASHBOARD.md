@@ -106,7 +106,7 @@ On submit, creates a `.task.md` file in `inbox/` and returns the task ID. The fi
 
 ### Chat Assistant Tab
 
-An embedded LLM chat interface powered by `qwen3.5:9b` with live pipeline awareness and tool access. It can answer status questions, look up task details, search the knowledge base and web, and create new tasks — all from a single chat window.
+An embedded LLM chat interface powered by `qwen3.5:9b` with live pipeline awareness and tool access. Responses stream token-by-token to the browser via Server-Sent Events. It can answer status questions, look up task details, search the knowledge base and web, and create new tasks — all from a single chat window.
 
 **Capabilities:**
 - **Pipeline status** — "What's processing?", "How many tasks failed?", "What's in the inbox?"
@@ -117,9 +117,24 @@ An embedded LLM chat interface powered by `qwen3.5:9b` with live pipeline awaren
 
 **Creating tasks via chat:**
 
-Ask naturally ("research the best Python HTTP client libraries" or "create a code task to add pagination to the API"). The assistant describes what it's creating, then the backend extracts the task and submits it to the orchestrator. A confirmation with the new task ID is returned in the response.
+Ask naturally ("research the best Python HTTP client libraries" or "create a code task to add pagination to the API"). The assistant describes what it's creating, then the backend extracts the task and submits it to the orchestrator. A green confirmation badge with the new task ID appears below the response.
 
-**Markdown rendering:** assistant and error responses are rendered as HTML using `marked.js`. Code blocks get syntax highlighting. User messages are displayed as plain text.
+**Streaming responses:**
+
+Chat uses `/api/chat/stream` (SSE) instead of a blocking request. The response bubble appears immediately with a pulsing `···` indicator while the backend runs the tool loop. Tool calls are shown as small badges (📚 rag query, 🔍 web search, 🌐 web fetch) before any text arrives. Tokens stream in as they are generated; a blinking cursor marks the live position. When the stream ends the raw text is converted to rendered markdown with syntax-highlighted code blocks.
+
+**Thinking mode toggle:**
+
+A toggle button next to Send switches between two modes:
+
+| Toggle | Label | LLM behaviour | Use for |
+|--------|-------|---------------|---------|
+| Off | ⚡ Standard | `think: False` — fast, direct answers | Pipeline status, quick lookups |
+| On  | 🧠 Thinking | `think: True`  — full chain-of-thought reasoning | Debugging, architecture questions, complex analysis |
+
+When thinking mode is active and the model produces a reasoning trace, a collapsible **💭 Thinking** block appears above the response. Click it to expand and read the model's internal reasoning. Different sampling options are applied per mode (configured in `config.json`).
+
+**Markdown rendering:** assistant responses are rendered as HTML using `marked.js` (GFM mode). Code blocks are syntax-highlighted via `highlight.js`. User messages are displayed as plain text.
 
 **Session behaviour:** conversation history is stored in memory (not persisted across dashboard restarts). Each browser session gets a UUID; up to 20 turns of history are retained (oldest pairs are dropped when the limit is hit). The **Clear Chat** button resets the current session.
 
@@ -134,12 +149,30 @@ Ask naturally ("research the best Python HTTP client libraries" or "create a cod
 {
   "chat": {
     "model": "qwen3.5:9b",
-    "timeout": 120,
+    "timeout": 240,
     "max_history_turns": 20,
-    "max_tool_turns": 8
+    "max_tool_turns": 8,
+    "options_standard": {
+      "temperature": 0.7,
+      "top_p": 0.8,
+      "top_k": 20,
+      "presence_penalty": 1.5,
+      "repeat_penalty": 1.0,
+      "num_ctx": 32768
+    },
+    "options_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "presence_penalty": 1.5,
+      "repeat_penalty": 1.0,
+      "num_ctx": 32768
+    }
   }
 }
 ```
+
+`options_standard` is used when the ⚡ Standard toggle is active; `options_thinking` is used when 🧠 Thinking is active. The `think` parameter sent to Ollama mirrors the toggle state. Both option sets fall back to hard-coded defaults if absent from `config.json`.
 
 ### Task Hierarchy View
 The History tab renders tasks in a parent/child tree. Parent tasks expand to show their subtasks (coder, research, QA, retry coders) in the order they were created. This makes it easy to trace the full lifecycle of a request — which subtasks were created, whether QA triggered a retry, and which iteration completed successfully.
@@ -372,6 +405,26 @@ The `action` field is only present when the assistant created a task. `reply` ha
 
 **Error (503):** `{"error": "LLM error: ..."}` — Ollama unreachable or returned an error.
 
+### POST /api/chat/stream
+Send a message and receive the response as a stream of Server-Sent Events. Uses the same session store and tool-calling logic as `/api/chat` but streams tokens to the browser as they are generated.
+
+**Request body:** identical to `POST /api/chat`.
+
+**Response:** `text/event-stream` with `Cache-Control: no-cache` and `X-Accel-Buffering: no`. Each event is a `data: {json}\n\n` line. Event types:
+
+| `type` | Additional fields | Description |
+|--------|-------------------|-------------|
+| `meta` | `session_id` | First event — provides the session UUID |
+| `tool_call` | `name`, `args` | A tool was dispatched (rag_query / web_search / web_fetch) |
+| `thinking` | `text` | Chunk of model reasoning (thinking mode only) |
+| `token` | `text` | Content token from the final LLM response |
+| `done` | `full_content`, `action?` | Stream complete; `full_content` is the assembled text; `action` present only when a task was created |
+| `error` | `message` | LLM or tool error; stream ends after this event |
+
+The terminal `data: [DONE]\n\n` line (no JSON) signals end of stream.
+
+**Note:** Not wrapped in `@_json_error_envelope` — errors are delivered as `{"type": "error", ...}` SSE events, not as HTTP error responses.
+
 ### POST /api/chat/clear
 Clear conversation history for a session.
 
@@ -494,7 +547,7 @@ Dashboard code:
 - `dashboard/templates/index.html` - UI HTML
 - `dashboard/static/dashboard.js` - Real-time polling and UI logic
 - `dashboard/static/dashboard.css` - Styling
-- `dashboard/agent_chat.py` - Chat LLM tool-calling loop (rag_query, web_search, web_fetch; max 8 tool turns)
+- `dashboard/agent_chat.py` - Chat LLM tool loop: `call_chat_with_tools` (blocking) and `stream_chat_with_tools` (generator — yields SSE-style event dicts; used by `/api/chat/stream`)
 - `dashboard/chat_context.py` - Pipeline snapshot builder and deep-task-context injector
 - `dashboard/chat_session.py` - In-memory session store (UUID-keyed, max 20 history turns)
 - `dashboard/chat_system_prompt.md` - Chat assistant system prompt template (injected with live pipeline state)

@@ -482,7 +482,8 @@ All endpoints are wrapped with a `@_json_error_envelope` decorator (N7): unhandl
 | `POST /api/pending-approvals/<id>/reject` | Move task to `failed/` with rejection reason |
 | `POST /api/tasks/submit` | Create a task in `inbox/` from the dashboard |
 | `POST /api/clear-cache` | Delete all task files, logs, and token counters (full system reset) |
-| `POST /api/chat` | Chat with the pipeline assistant; can create tasks via `<CREATE_TASK>` blocks |
+| `POST /api/chat` | Chat with the pipeline assistant (blocking); can create tasks via `<CREATE_TASK>` blocks |
+| `POST /api/chat/stream` | Chat via SSE streaming — yields `meta / tool_call / thinking / token / done / error` events |
 | `POST /api/chat/clear` | Clear conversation history for a session |
 | `GET /api/rag/status` | RAG API liveness |
 | `GET /api/rag/documents` | List knowledge base documents |
@@ -547,7 +548,11 @@ All runtime settings live in `config.json` at the project root, loaded by `scrip
   },
   "scheduler": { "enable_timer_polling": false },
   "dashboard": { "port": 5000, "debug": false, "poll_interval": 1500 },
-  "chat": { "model": "qwen3.5:9b", "timeout": 120, "max_history_turns": 20, "max_tool_turns": 8 },
+  "chat": {
+    "model": "qwen3.5:9b", "timeout": 240, "max_history_turns": 20, "max_tool_turns": 8,
+    "options_standard": { "temperature": 0.7, "top_p": 0.8,  "top_k": 20, "presence_penalty": 1.5, "num_ctx": 32768 },
+    "options_thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5, "num_ctx": 32768 }
+  },
   "rag_api": { "url": "http://localhost:8000" }
 }
 ```
@@ -563,7 +568,7 @@ All runtime settings live in `config.json` at the project root, loaded by `scrip
 
 ## Ollama Integration
 
-Both plain chat and tool-calling modes use `scripts/shared/ollama_client.py` (backed by the `ollama` Python library).
+All LLM calls go through `scripts/shared/ollama_client.py` (backed by the `ollama` Python library). Three public methods cover every usage pattern in the system.
 
 **Critical:** `OLLAMA_API_KEY` must be set in the environment before the `ollama` library is imported — the library reads the env var at module initialisation. `ollama_client.py` is always the first shared import in every agent script and sets `os.environ["OLLAMA_API_KEY"]` from `config.json` before `import ollama` runs.
 
@@ -572,13 +577,22 @@ Both plain chat and tool-calling modes use `scripts/shared/ollama_client.py` (ba
 ollama.Client(host=...).chat(model, messages, options)
 ```
 
-**Tool-calling loop** (`OllamaClient.chat_with_tools()`) — used by research and QA. Tools are passed as **Python callables**: the `ollama` library introspects type annotations and docstrings to auto-generate JSON schemas — no manual tool-definition dicts needed.
+**Tool-calling loop** (`OllamaClient.chat_with_tools()`) — used by research, QA, and the dashboard chat tool-phase. Tools are passed as **Python callables**: the `ollama` library introspects type annotations and docstrings to auto-generate JSON schemas — no manual tool-definition dicts needed.
 
 ```python
 result = client.chat_with_tools(model, messages, tools=[web_search, web_fetch, rag_query])
 ```
 
 Returns `{"type": "text", ...}` or `{"type": "tool_call", "name": ..., "arguments": {...}, "raw_message": <Message>}`. The agent executes the tool, appends results to message history, and loops until a text response is received or the turn limit is hit.
+
+**Streaming response** (`OllamaClient.stream_response()`) — used exclusively by the dashboard chat for the final LLM response after the tool loop completes:
+
+```python
+for chunk in client.stream_response(model, messages, options, think):
+    # chunk = {"thinking": str, "content": str, "done": bool}
+```
+
+Called with `stream=True`; each chunk carries either a `thinking` fragment (model reasoning, only when `think=True`) or a `content` fragment (response token), plus a `done` flag on the last chunk. The dashboard's `stream_chat_with_tools()` generator calls `chat_with_tools()` for tool dispatch (non-streaming — fast) and then switches to `stream_response()` for the final answer so the browser receives tokens as they are generated.
 
 **Web tools** (`scripts/shared/web_search.py`):
 

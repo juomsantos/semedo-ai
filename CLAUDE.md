@@ -38,7 +38,11 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 
 **Dashboard endpoints all return JSON errors.** Every Flask endpoint is wrapped with `@_json_error_envelope` — unhandled exceptions return `{"error": "..."}` with an appropriate status code rather than an HTML 500 page.
 
-**Dashboard chat markdown:** assistant responses are rendered as HTML via `marked.js` (GFM mode). User messages are plain text.
+**Dashboard chat markdown:** assistant responses are rendered as HTML via `marked.js` (GFM mode). Code blocks are syntax-highlighted by `highlight.js` via `hljs.highlightElement()` applied post-DOM-insert. User messages are plain text.
+
+**Dashboard chat streaming:** chat uses `POST /api/chat/stream` (SSE), not the blocking `/api/chat`. The browser reads `text/event-stream` via `ReadableStream`; each `data: {json}` line carries one of five event types: `meta` (session id), `tool_call` (tool dispatched), `thinking` (reasoning chunk), `token` (content chunk), `done` (full assembled text + optional `action`). `stream_chat_with_tools()` in `agent_chat.py` is a generator: Phase 1 runs the non-streaming tool loop yielding `tool_call` events; Phase 2 calls `client.stream_response()` for the final LLM response. This costs one extra non-streaming LLM call (the `chat_with_tools` text-response that triggers the break) but keeps tool dispatch clean and gives real token-by-token streaming for the final answer. `/api/chat/stream` is **not** wrapped in `@_json_error_envelope` — errors are delivered as `{"type":"error",...}` SSE events.
+
+**Dashboard chat thinking mode:** a toggle (⚡ Standard / 🧠 Thinking) sends `thinking_mode: true/false` in the request body. The backend selects `CHAT_OPTIONS_THINKING` or `CHAT_OPTIONS_STANDARD` from `config.json → chat.options_thinking/options_standard` and passes `think=thinking_mode` to Ollama. When thinking content arrives in stream chunks (`chunk.message.thinking`), `stream_response()` yields it as `{"thinking": str, "content": "", "done": false}`; the browser renders it in a collapsible `<details>` block. The two option sets differ in temperature (1.0 vs 0.7) and `top_p` (0.95 vs 0.8).
 
 **Validation loop mechanics:**
 - Workers move completed tasks to `validation/` via `mark_awaiting_validation()` — never directly to `outbox/`.
@@ -140,7 +144,7 @@ AI Team/
     app.py                ← Flask REST API + @_json_error_envelope on all endpoints
     run_dashboard.py      ← launcher
     task_monitor.py       ← filesystem scanner; yaml.safe_load for frontmatter
-    agent_chat.py         ← chat LLM tool loop (rag_query, web_search, web_fetch; max 8 turns)
+    agent_chat.py         ← chat LLM tool loop: call_chat_with_tools (blocking) + stream_chat_with_tools (SSE generator)
     chat_context.py       ← pipeline snapshot + deep task context injector
     chat_session.py       ← in-memory UUID-keyed sessions (max 20 history turns)
     chat_system_prompt.md
@@ -150,7 +154,7 @@ AI Team/
   scripts/
     shared/
       task_io.py          ← task file I/O, dependency resolution, validation grouping
-      ollama_client.py    ← chat() + chat_with_tools(); sets OLLAMA_API_KEY at import time
+      ollama_client.py    ← chat() + chat_with_tools() + stream_response(); sets OLLAMA_API_KEY at import time
       token_logger.py     ← appends {ts, task_id, prompt, completion} to tokens.jsonl
       web_search.py       ← web_search() + web_fetch() wrappers (ollama Python library)
       rag_tool.py         ← rag_query(query, top_k) → str; graceful fallback on unavailability
