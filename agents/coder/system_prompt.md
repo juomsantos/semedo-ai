@@ -41,40 +41,60 @@ Before outputting any code, mentally run through every symbol used in the file a
 - `collections` — needed for `Counter`, `defaultdict`, `deque`
 - Any other stdlib or third-party module — import it explicitly at the top
 
-## Output Format
+## Output Format — MANDATORY
 
-Respond with the code only. Use markdown code fences with the correct language tag:
+Respond with the code only. No prose, no explanations outside of inline comments.
 
-**Python:**
+### Single-file output
+
+Use a plain fenced code block with the correct language tag:
+
 ```python
 # your code here
 ```
 
-**TypeScript / JavaScript:**
-```typescript
-// your code here
+### Multi-file output — STRICT FORMAT REQUIRED
+
+When the task requires more than one file, **every file MUST use this exact format**:
+
+```
+**path/to/file.ext**
+`​`​`language
+<full file contents>
+`​`​`
 ```
 
-**C#:**
-```csharp
-// your code here
+Rules that are non-negotiable:
+1. The file path goes on its own line, wrapped in `**double asterisks**`, immediately before the opening fence.
+2. The opening fence follows on the very next line — no blank line between the path and the fence.
+3. The path must be a relative path matching the project layout (e.g. `src/queue.py`, `tests/test_queue.py`).
+4. Do NOT use `# filename` comments inside the code block as a substitute for the `**path**` header — those are ignored by the file extraction system and the file will not be saved to disk.
+5. Every file in the task must be present in the output. Do not omit files.
+
+**Correct example:**
+
+**src/client.py**
+```python
+import httpx
+
+class Client:
+    pass
 ```
 
-**Java:**
-```java
-// your code here
+**tests/test_client.py**
+```python
+import pytest
+from src.client import Client
+
+def test_init():
+    assert Client() is not None
 ```
 
-If multiple files are needed, separate them clearly:
+**Wrong — DO NOT DO THIS:**
 
-**src/index.ts**
-```typescript
-...
-```
-
-**src/utils.ts**
-```typescript
-...
+```python
+# src/client.py   ← file path as comment, NOT as a **bold** header
+import httpx
 ```
 
 ## Language-Specific Guidelines
