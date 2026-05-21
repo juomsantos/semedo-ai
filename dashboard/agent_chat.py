@@ -5,7 +5,7 @@ agent_chat.py — Chat agent with tool calling via Ollama.
 import sys
 import os
 from pathlib import Path
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Optional
 
 # Add scripts to path — MUST be before importing shared modules
 project_root = Path(__file__).resolve().parent.parent
@@ -32,6 +32,8 @@ def call_chat_with_tools(
     history: List[Dict],
     user_message: str,
     max_tool_turns: int = 8,
+    options: Optional[dict] = None,
+    think: Optional[bool] = None,
 ) -> str:
     """
     Run the tool-calling loop. Manages session history internally (tool messages are ephemeral).
@@ -42,6 +44,9 @@ def call_chat_with_tools(
         history: Prior user/assistant message pairs (no tool messages)
         user_message: The user's current message
         max_tool_turns: Max tool calls before forcing a text response
+        options: Ollama sampling options dict (temperature, top_p, top_k, etc.)
+        think: When True enables the model's internal reasoning mode; False
+               disables it; None leaves the model default.
 
     Returns:
         The assistant's final text response
@@ -69,6 +74,8 @@ def call_chat_with_tools(
                 model=model,
                 messages=messages,
                 tools=tools,
+                options=options,
+                think=think,
             )
         except OllamaError:
             raise
@@ -129,6 +136,8 @@ def call_chat_with_tools(
             model=model,
             messages=messages,
             tools=[],
+            options=options,
+            think=think,
         )
         if response.get("type") == "text":
             return response.get("content", "").strip() or "No response generated."

@@ -139,9 +139,17 @@ if chat_system_prompt_path.exists():
 # and as the outer fallback (when load_config itself blows up). Hoisted to
 # module-top so the two paths can't drift.
 DEFAULT_CHAT_MODEL = "qwen3.5:9b"
-DEFAULT_CHAT_TIMEOUT_S = 120
+DEFAULT_CHAT_TIMEOUT_S = 240
 DEFAULT_CHAT_MAX_TOOL_TURNS = 8
 DEFAULT_RAG_BASE_URL = "http://localhost:8000"
+DEFAULT_CHAT_OPTIONS_STANDARD = {
+    "temperature": 0.7, "top_p": 0.8, "top_k": 20,
+    "presence_penalty": 1.5, "repeat_penalty": 1.0, "num_ctx": 32768,
+}
+DEFAULT_CHAT_OPTIONS_THINKING = {
+    "temperature": 1.0, "top_p": 0.95, "top_k": 20,
+    "presence_penalty": 1.5, "repeat_penalty": 1.0, "num_ctx": 32768,
+}
 
 # Load config for chat settings
 try:
@@ -150,10 +158,14 @@ try:
     CHAT_MODEL = chat_config.get("model", config.agent_model("orchestrator") or DEFAULT_CHAT_MODEL)
     CHAT_TIMEOUT = chat_config.get("timeout", DEFAULT_CHAT_TIMEOUT_S)
     CHAT_MAX_TOOL_TURNS = chat_config.get("max_tool_turns", DEFAULT_CHAT_MAX_TOOL_TURNS)
+    CHAT_OPTIONS_STANDARD = chat_config.get("options_standard", DEFAULT_CHAT_OPTIONS_STANDARD)
+    CHAT_OPTIONS_THINKING = chat_config.get("options_thinking", DEFAULT_CHAT_OPTIONS_THINKING)
 except Exception:
     CHAT_MODEL = DEFAULT_CHAT_MODEL
     CHAT_TIMEOUT = DEFAULT_CHAT_TIMEOUT_S
     CHAT_MAX_TOOL_TURNS = DEFAULT_CHAT_MAX_TOOL_TURNS
+    CHAT_OPTIONS_STANDARD = DEFAULT_CHAT_OPTIONS_STANDARD
+    CHAT_OPTIONS_THINKING = DEFAULT_CHAT_OPTIONS_THINKING
 
 
 @app.route("/")
@@ -494,6 +506,7 @@ def chat():
     user_message = body.get("message", "").strip()
     session_id = body.get("session_id")
     client_timestamp = body.get("timestamp", "").strip()  # ISO string from browser
+    thinking_mode = bool(body.get("thinking_mode", False))
 
     if not user_message:
         return jsonify({"error": "message is required"}), 400
@@ -522,6 +535,7 @@ def chat():
     # Call LLM with tools — pass the timestamped message so the model sees timing.
     # OllamaError is mapped explicitly to 503 (upstream LLM unavailable) before
     # the envelope decorator would otherwise turn it into a 500.
+    chat_options = CHAT_OPTIONS_THINKING if thinking_mode else CHAT_OPTIONS_STANDARD
     try:
         reply = call_chat_with_tools(
             model=CHAT_MODEL,
@@ -529,6 +543,8 @@ def chat():
             history=history,
             user_message=stamped_user_message,
             max_tool_turns=CHAT_MAX_TOOL_TURNS,
+            options=chat_options,
+            think=thinking_mode,
         )
     except OllamaError as e:
         return jsonify({"error": f"LLM error: {str(e)}"}), 503

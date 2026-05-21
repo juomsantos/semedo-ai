@@ -1417,7 +1417,26 @@ a { color: var(--accent); text-decoration: none; }
 .chat-textarea::placeholder, .chat-input::placeholder { color: var(--text-muted); }
 .chat-textarea:focus, .chat-input:focus { border-color: var(--accent); }
 
-.chat-actions { display: flex; justify-content: flex-end; }
+.chat-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.chat-mode-toggle {
+  font-size: 12px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  text-align: center;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+
+.chat-mode-toggle.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* ─── CHAT MARKDOWN RENDERING ──────────────────────────────── */
 

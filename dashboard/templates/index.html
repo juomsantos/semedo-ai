@@ -241,7 +241,14 @@
                 <textarea id="chat-input" class="chat-textarea"
                     placeholder="Ask about tasks, pipeline status, research questions, or create new tasks… (Ctrl+Enter to send)"
                     rows="3"></textarea>
-                <button id="chat-send-btn" class="btn-primary" onclick="sendChatMessage()">Send</button>
+                <div class="chat-actions">
+                    <button id="chat-think-toggle" class="btn-ghost chat-mode-toggle"
+                        onclick="toggleThinkingMode()"
+                        title="Standard: fast responses. Thinking: deep reasoning for complex questions.">
+                        ⚡ Standard
+                    </button>
+                    <button id="chat-send-btn" class="btn-primary" onclick="sendChatMessage()">Send</button>
+                </div>
             </div>
         </section>
 

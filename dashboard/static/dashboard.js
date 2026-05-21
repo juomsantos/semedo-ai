@@ -1378,44 +1378,39 @@ function escapeHtml(text) {
 // ============================================================================
 
 let chatSessionId = null;
+let chatThinkingMode = false;
+
+function toggleThinkingMode() {
+    chatThinkingMode = !chatThinkingMode;
+    const btn = document.getElementById('chat-think-toggle');
+    if (chatThinkingMode) {
+        btn.textContent = '🧠 Thinking';
+        btn.classList.add('active');
+    } else {
+        btn.textContent = '⚡ Standard';
+        btn.classList.remove('active');
+    }
+}
+
+// ── marked setup (runs once) ─────────────────────────────────────────────
+// We let marked render code blocks normally and apply hljs AFTER the HTML is
+// inserted into the DOM via hljs.highlightElement(). This avoids the marked
+// v11 renderer API ambiguity entirely and is the approach hljs itself recommends.
+(function initMarked() {
+    marked.use({ breaks: true, gfm: true });
+})();
 
 function markdownToHtml(text) {
-    // Configure marked.js
-    marked.setOptions({
-        breaks: true,
-        gfm: true,
-    });
-
-    // Configure code highlighting with Highlight.js
-    const originalRenderer = marked.Renderer.prototype.code;
-    marked.Renderer.prototype.code = function(code, language) {
-        if (language && hljs.getLanguage(language)) {
-            try {
-                const highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
-                return `<pre><code class="language-${language} hljs">${highlighted}</code></pre>`;
-            } catch (e) {
-                // Fallback if highlighting fails
-                return `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
-            }
-        }
-        // No language specified or not recognized
-        return `<pre><code>${escapeHtml(code)}</code></pre>`;
-    };
-
-    // Parse markdown to HTML
-    let html = marked.parse(text);
-
-    // Sanitize HTML to prevent XSS, but allow formatting tags
-    const config = {
-        ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-                       'ul', 'ol', 'li', 'blockquote', 'a', 'img', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'hr'],
+    const html = marked.parse(text);
+    // span is allowed so hljs spans survive if any are already present.
+    return DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'span',
+                       'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                       'ul', 'ol', 'li', 'blockquote', 'a', 'img',
+                       'table', 'thead', 'tbody', 'tr', 'td', 'th', 'hr'],
         ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'style'],
         ALLOW_DATA_ATTR: false,
-    };
-
-    html = DOMPurify.sanitize(html, config);
-
-    return html;
+    });
 }
 
 function escapeHtml(text) {
@@ -1446,7 +1441,7 @@ function sendChatMessage() {
     fetch('/api/chat', withAuth({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, session_id: chatSessionId, timestamp: isoTs }),
+        body: JSON.stringify({ message, session_id: chatSessionId, timestamp: isoTs, thinking_mode: chatThinkingMode }),
     }))
     .then(resp => {
         if (!resp.ok) {
@@ -1497,6 +1492,12 @@ function appendChatBubble(role, content) {
         bubble.textContent = content;
     } else {
         bubble.innerHTML = markdownToHtml(content);
+        // Apply syntax highlighting to each fenced code block.
+        // hljs.highlightElement() operates on the live DOM node so it bypasses
+        // the marked renderer API entirely — works on any marked version.
+        bubble.querySelectorAll('pre code').forEach(el => {
+            hljs.highlightElement(el);
+        });
     }
 
     // Timestamp
