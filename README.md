@@ -28,6 +28,7 @@ You interact through a **real-time web dashboard** — submit tasks, monitor pro
 - **Web-enabled agents** — research and QA agents can search the web and fetch pages in their reasoning loop
 - **Real-time dashboard** — task status, agent stats, logs, approvals, and knowledge base management in one place
 - **Persistent results** — all completed work is stored in `outbox/` and always accessible
+- **File materialisation** — if the coder names its output files (e.g. `src/app.py`, `src/utils.ts`), those files are written to `outputs/<task-id>/` on completion, ready to copy directly into your project
 
 ---
 
@@ -185,6 +186,8 @@ Completed results appear in the **Results** tab, organised by agent. Each result
 
 Result files are also available directly at `outbox/*_result.md`.
 
+If the coder produced named source files (e.g. `src/app.py`, `src/utils.ts`), they are written to `outputs/<task-id>/` on completion — organised in the same directory structure the coder specified, ready to use directly.
+
 ### Using the Chat assistant
 
 The **Chat** tab gives you a conversational interface to the pipeline. The assistant has full context of what's in the pipeline (tasks, results, logs) and can answer questions about the work. It can also create tasks on your behalf — just describe what you want.
@@ -237,7 +240,8 @@ ai-team/
   rag_api/          ← local knowledge base service (FastAPI + ChromaDB)
   tests/            ← pytest unit-test suite
   inbox/            ← drop task files here to submit work
-  outbox/           ← completed results
+  outbox/           ← completed results (summaries + subtask outputs)
+  outputs/          ← named source files extracted from coder tasks (outputs/<task-id>/...)
   processing/       ← tasks currently being worked on
   validation/       ← results awaiting orchestrator review
   failed/           ← tasks that could not be completed

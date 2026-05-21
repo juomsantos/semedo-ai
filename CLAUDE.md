@@ -44,6 +44,7 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 - Workers move completed tasks to `validation/` via `mark_awaiting_validation()` — never directly to `outbox/`.
 - Orchestrator Phase 1 reviews each parent's subtasks and returns `complete | refine | redo | additional_work`. Max 5 iterations; forced `complete` at the cap.
 - On `complete`, the orchestrator sweeps all remaining subtasks for that parent out of `validation/` in two passes (known list + glob fallback) before closing.
+- **File extraction on `complete`:** after closing the parent, every passing code subtask's result body is scanned for `**path/to/file.ext**\n```lang\n...\n```\n` blocks (`_extract_named_files` in `orchestration/validate.py`). Each named file is written to `outputs/<parent_task_id>/<rel_path>`. Retry coders (`created_by == "qa"`) supersede their originals — the link is `context_files[0]` on the retry equals the original's `output_path`. Multiple distinct subtasks are all extracted independently. Absolute paths and `..` traversal in LLM-generated filenames are rejected by `_is_safe_output_path`. Extraction errors are logged and never block task completion.
 - `MAX_RESULT_CHARS = 256000` caps what's passed to the validation LLM; truncated results get a `[TRUNCATED]` note so the LLM doesn't request more work just because the preview is cut.
 - **Validation repair call:** if the validation LLM returns unparseable JSON, a single repair attempt is made using `threading.Thread(daemon=True)` with a hard 300s wall-clock ceiling (`t.join(timeout=300)`). The repair call receives the **full original context** (parent task + all subtask results, identical to the first call) plus a note about the parse failure — not just a fragment of the bad response. If the repair thread is still alive after 300s, `_VALIDATION_PARSE_FAILED` is returned and the parent is moved to `failed/`. **Do not use `ThreadPoolExecutor` here** — its `with` block calls `shutdown(wait=True)` on `__exit__`, which blocks until the Ollama thread finishes regardless of `future.result(timeout=N)`, completely negating the timeout.
 
@@ -113,6 +114,7 @@ AI Team/
   processing/              ← parent tasks held during validation loop (+ orchestrator.lock)
   validation/              ← completed subtasks awaiting orchestrator review
   outbox/                  ← completed results
+  outputs/                 ← named source files extracted from completed coder tasks; outputs/<parent_task_id>/<rel_path>
   failed/                  ← QA failure reports + hard-errored tasks
   context/                 ← optional shared context files
   rag_api/
@@ -166,7 +168,7 @@ AI Team/
     scheduler.py
     orchestration/
       decompose.py        ← decomposition LLM + redecompose_after_research
-      validate.py         ← Phase 1: validation loop + QA gate
+      validate.py         ← Phase 1: validation loop + QA gate; file extraction to outputs/ on complete
       dispatch.py         ← Phase 3: task routing + subtask creation
       recovery.py         ← four startup orphan/stall recovery functions
       qa_chain.py         ← _find_qa_for_coder_subtask, _find_retry_coder_output, _extract_qa_verdict

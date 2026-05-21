@@ -110,6 +110,7 @@ AI Team/
   processing/                  ← parent tasks held during validation loop (+ orchestrator.lock)
   validation/                  ← completed subtasks awaiting orchestrator approval
   outbox/                      ← approved & completed results
+  outputs/                     ← named source files extracted from completed coder tasks; one subfolder per parent task (outputs/<parent_task_id>/path/to/file.ext)
   failed/                      ← QA failure reports + hard-errored tasks
   context/                     ← optional shared context files for tasks
   rag_api/                     ← local knowledge base service
@@ -185,7 +186,7 @@ AI Team/
     scheduler.py               ← cross-platform scheduler: file watcher + optional timer + RAG API lifecycle
     orchestration/             ← M1: orchestrator split into focused modules
       decompose.py             ← decomposition LLM call + redecompose_after_research path
-      validate.py              ← Phase 1 validation loop + QA gate logic
+      validate.py              ← Phase 1 validation loop + QA gate logic; extracts named coder files to outputs/ on complete
       dispatch.py              ← Phase 3 task routing and subtask creation
       recovery.py              ← four orphan/stall recovery functions (run at startup)
       qa_chain.py              ← QA gate helpers: _find_qa_for_coder_subtask, _find_retry_coder_output, _extract_qa_verdict
@@ -347,7 +348,7 @@ Every cycle (triggered by file watcher or timer) the orchestrator runs three pha
 
 | Decision | Meaning | Action |
 |---|---|---|
-| `complete` | Work satisfies requirements | Move parent from `processing/` → `outbox/` |
+| `complete` | Work satisfies requirements | Move parent from `processing/` → `outbox/`; extract named files to `outputs/<parent_task_id>/` |
 | `refine` | Mostly good; minor improvements needed | Create follow-up subtasks, increment `iteration` |
 | `additional_work` | Sound approach but incomplete | Create follow-up subtasks, increment `iteration` |
 | `redo` | Does not meet requirements | Create new subtasks with failure context, increment `iteration` |
@@ -371,6 +372,8 @@ validation/     → orchestrator validates  → outbox/ (complete) | back to age
 ```
 
 Workers never write their task file directly to `outbox/`. They write their result file to `outbox/` but move their task file to `validation/` via `mark_awaiting_validation()`. Only the orchestrator's `complete` decision moves the parent task to `outbox/`.
+
+On `complete`, the orchestrator also scans every passing coder subtask's result for explicitly named file blocks — the `**path/to/file.ext**` header immediately above a markdown code fence, as specified in the coder system prompt. Each named file is written to `outputs/<parent_task_id>/path/to/file.ext`, creating the directory tree as needed. If the same logical subtask was retried (QA dispatched a retry coder with `created_by="qa"`), only the final retry output is used; the original is skipped. Multiple distinct code subtasks are all extracted independently. Extraction errors are logged and never prevent the parent from being marked complete.
 
 ---
 
