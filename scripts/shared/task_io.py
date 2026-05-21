@@ -305,4 +305,4 @@ def resolve_task_dependencies(inboxes_dict: dict) -> None:
                 ))
                 del task["meta"]["depends_on"]
                 body = task["body"]
-                write_result(str(task_path), body, me
+                write_result(str(task_path), body, meta=task["meta"])

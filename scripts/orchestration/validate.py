@@ -461,4 +461,45 @@ def validation_phase(client: OllamaClient, log: AgentLogger):
     log.info(f"Found {len(grouped)} parent task(s) with completed subtasks awaiting validation")
 
     for parent_task_id, completed_subtasks in grouped.items():
-        log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
+        log.info(f"Validating {len(completed_subtasks)} subtask(s) for parent {parent_task_id}")
+
+        # Check for research-first re-decomposition before anything else.
+        # If the parent was flagged with redecompose_after_research, skip normal validation
+        # and re-run the decomposition prompt with the research outputs in context.
+        parent_path = _task_io.PROJECT_ROOT / "processing" / f"{parent_task_id}.task.md"
+        if parent_path.exists():
+            try:
+                parent_meta = read_task(parent_path)["meta"]
+                if parent_meta.get("redecompose_after_research"):
+                    log.info(f"Parent {parent_task_id} has redecompose_after_research flag — re-decomposing")
+                    redecompose_with_research(parent_task_id, completed_subtasks, client, log)
+                    continue
+            except Exception as e:
+                log.error(f"Failed to read parent task {parent_task_id} for redecompose check: {e}")
+
+        # Gate: if any code subtask is still waiting for QA, skip this parent for now.
+        qa_still_running = False
+        for subtask in completed_subtasks:
+            if subtask["meta"].get("chain_to") == "qa" or subtask["meta"].get("type") == "code":
+                qa_status, _ = _find_qa_for_coder_subtask(subtask)
+                if qa_status in ("pending", "not_found"):
+                    log.info(
+                        f"Skipping validation for parent {parent_task_id} — "
+                        f"QA not yet complete for coder subtask {subtask['meta'].get('id')} "
+                        f"(qa_status={qa_status})"
+                    )
+                    qa_still_running = True
+                    break
+        if qa_still_running:
+            continue
+
+        decision = validate_completed_tasks(parent_task_id, completed_subtasks, client, log)
+        if decision is _VALIDATION_PARSE_FAILED:
+            log.error(
+                f"Validation LLM returned unparseable JSON twice for {parent_task_id} — failing task"
+            )
+            parent_path = _task_io.PROJECT_ROOT / "processing" / f"{parent_task_id}.task.md"
+            if parent_path.exists():
+                mark_failed(parent_path)
+        elif decision:
+            handle_validation_decision(parent_task_id, decision, client, log)

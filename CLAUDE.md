@@ -30,7 +30,7 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 
 **`context_files` paths must be Windows paths.** The coder calls `Path(cf).exists()` on Windows and silently skips anything that doesn't resolve. Always read `output_path` from a task's own frontmatter — never use `Path(...).resolve()` from bash (produces Linux mount paths the coder can't open).
 
-**`mark_processing()` uses regex, not a frontmatter round-trip.** A round-trip via `python-frontmatter` drops fields silently. The regex replacement guarantees all original frontmatter fields survive (id, output_path, parent_task_id, etc.).
+**`mark_processing()` uses regex, not a frontmatter round-trip.** A round-trip via `python-frontmatter` drops fields silently. The regex replacement guarantees all original frontmatter fields survive (id, output_path, parent_task_id, etc.). Both `mark_processing()` and `mark_awaiting_validation()` pass `count=1` to `re.sub()` to avoid replacing multiple `status:` occurrences if a malformed frontmatter block contains duplicates.
 
 **Dashboard YAML parser** (`task_monitor.py::_parse_yaml_frontmatter`) uses `yaml.safe_load`. PyYAML handles unquoted Windows backslash paths correctly. Malformed YAML returns `{}`.
 
@@ -45,6 +45,7 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 - Orchestrator Phase 1 reviews each parent's subtasks and returns `complete | refine | redo | additional_work`. Max 5 iterations; forced `complete` at the cap.
 - On `complete`, the orchestrator sweeps all remaining subtasks for that parent out of `validation/` in two passes (known list + glob fallback) before closing.
 - `MAX_RESULT_CHARS = 256000` caps what's passed to the validation LLM; truncated results get a `[TRUNCATED]` note so the LLM doesn't request more work just because the preview is cut.
+- **Validation repair call:** if the validation LLM returns unparseable JSON, a single repair attempt is made using `threading.Thread(daemon=True)` with a hard 300s wall-clock ceiling (`t.join(timeout=300)`). The repair call receives the **full original context** (parent task + all subtask results, identical to the first call) plus a note about the parse failure — not just a fragment of the bad response. If the repair thread is still alive after 300s, `_VALIDATION_PARSE_FAILED` is returned and the parent is moved to `failed/`. **Do not use `ThreadPoolExecutor` here** — its `with` block calls `shutdown(wait=True)` on `__exit__`, which blocks until the Ollama thread finishes regardless of `future.result(timeout=N)`, completely negating the timeout.
 
 **QA gate:** the orchestrator's Phase 1 does not fire on a code subtask until its QA task has finished. If QA is still in-flight, the parent is skipped that cycle. On first FAIL (`retry_count == 0`), QA dispatches a retry coder task; the orchestrator waits for the full retry cycle (retry coder → QA2) before validating. `_find_retry_coder_output` uses a timestamp guard to avoid matching old completed tasks. If the retry coder ends up in `failed/`, a sentinel is returned and Phase 1 uses QA1's verdict.
 
@@ -56,7 +57,7 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 
 **Orphan recovery** (runs at orchestrator startup, in `orchestration/recovery.py`):
 1. `recover_orphaned_tasks()` — returns `status: pending` parent tasks in `processing/` to `inbox/`.
-2. `recover_processing_subtasks()` — returns subtasks stuck in `status: processing` for >720s to their worker inbox (workers killed mid-LLM-call). Does not increment `stall_retry_count`.
+2. `recover_processing_subtasks()` — returns subtasks stuck in `status: processing` for >720s to their worker inbox (workers killed mid-LLM-call). Does not increment `stall_retry_count`. Covers all four workers: `coder`, `research`, `claude-code`, and `qa` (Fix 1: `"qa"` added to `WORKER_INBOXES` in `agent_orchestrator.py`).
 3. `recover_stalled_subtasks()` — retries subtasks in `failed/` whose parent is still in `processing/` (up to `stall_retry_count < 2`); writes failure report and moves parent to `failed/` at the limit.
 4. `recover_orphaned_validation_subtasks()` — sweeps `validation/` for subtasks whose parent completed before a restart.
 
