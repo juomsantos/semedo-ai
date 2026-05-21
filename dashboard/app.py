@@ -21,7 +21,7 @@ import re
 from functools import wraps
 from pathlib import Path
 from datetime import datetime, timezone
-from flask import Flask, jsonify, request, send_from_directory, render_template
+from flask import Flask, jsonify, request, send_from_directory, render_template, Response, stream_with_context
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
 
@@ -32,7 +32,7 @@ sys.path.insert(0, str(dashboard_dir))
 from task_monitor import TaskMonitor
 from chat_session import ChatSessionStore
 from chat_context import build_base_snapshot, get_deep_task_context, extract_task_id
-from agent_chat import call_chat_with_tools
+from agent_chat import call_chat_with_tools, stream_chat_with_tools
 from shared.ollama_client import OllamaError
 
 # Determine project root (parent of dashboard)
@@ -594,6 +594,130 @@ def chat():
         result["action"] = action
 
     return jsonify(result), 200
+
+
+@app.route("/api/chat/stream", methods=["POST"])
+@require_dashboard_token
+def chat_stream():
+    """SSE streaming chat endpoint — yields newline-delimited JSON events.
+
+    Event types (all as ``data: {json}\\n\\n`` lines):
+      {"type": "meta",      "session_id": str}
+      {"type": "tool_call", "name": str, "args": dict}
+      {"type": "thinking",  "text": str}
+      {"type": "token",     "text": str}
+      {"type": "done",      "full_content": str, "action"?: dict}
+      {"type": "error",     "message": str}
+
+    Intentionally NOT wrapped in @_json_error_envelope — a streaming
+    response must be a plain Response, not a jsonify'd envelope.
+    """
+    import json as _json
+
+    body = request.get_json() or {}
+    user_message = body.get("message", "").strip()
+    session_id = body.get("session_id")
+    client_timestamp = body.get("timestamp", "").strip()
+    thinking_mode = bool(body.get("thinking_mode", False))
+
+    if not user_message:
+        return jsonify({"error": "message is required"}), 400
+
+    if not session_id:
+        session_id = chat_session_store.new_session()
+
+    history = chat_session_store.get_history(session_id)
+
+    base_snapshot = build_base_snapshot(PROJECT_ROOT)
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    system_prompt = (
+        CHAT_SYSTEM_PROMPT_TEMPLATE
+        .replace("{PIPELINE_SNAPSHOT}", base_snapshot)
+        .replace("{NOW}", now_str)
+    )
+
+    ts_label = client_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stamped_user_message = f"[{ts_label}] {user_message}"
+
+    task_id_ref = extract_task_id(user_message)
+    if task_id_ref:
+        deep_context = get_deep_task_context(task_id_ref, PROJECT_ROOT)
+        system_prompt = system_prompt.replace("{PIPELINE_SNAPSHOT}", f"{base_snapshot}{deep_context}")
+
+    chat_options = CHAT_OPTIONS_THINKING if thinking_mode else CHAT_OPTIONS_STANDARD
+
+    def generate():
+        # First event: session metadata so the client can store the session id
+        yield f"data: {_json.dumps({'type': 'meta', 'session_id': session_id})}\n\n"
+
+        full_content = ""
+        for event in stream_chat_with_tools(
+            model=CHAT_MODEL,
+            system_prompt=system_prompt,
+            history=history,
+            user_message=stamped_user_message,
+            max_tool_turns=CHAT_MAX_TOOL_TURNS,
+            options=chat_options,
+            think=thinking_mode,
+        ):
+            if event["type"] == "done":
+                full_content = event.get("full_content", "")
+
+                # Handle CREATE_TASK block
+                action = None
+                task_match = re.search(
+                    r'<CREATE_TASK>\s*(\{[^}]+\})\s*</CREATE_TASK>',
+                    full_content, re.DOTALL
+                )
+                if task_match:
+                    try:
+                        task_data = _json.loads(task_match.group(1))
+                        t_type = task_data.get("type", "code").strip()
+                        t_priority = task_data.get("priority", "medium").strip()
+                        t_desc = task_data.get("description", "").strip()
+                        t_expected = task_data.get("expected_output", "See task description.").strip()
+                        if t_desc:
+                            inbox_path = PROJECT_ROOT / "inbox"
+                            t_path = create_task_file(
+                                inbox_path=inbox_path,
+                                task_type=t_type,
+                                description=t_desc,
+                                expected_output=t_expected,
+                                priority=t_priority,
+                                created_by="chat",
+                                assigned_to="orchestrator",
+                                context_files=[],
+                            )
+                            new_task_id = t_path.stem.replace(".task", "")
+                            action = {"type": "task_created", "task_id": new_task_id}
+                        full_content = re.sub(
+                            r'<CREATE_TASK>.*?</CREATE_TASK>', '',
+                            full_content, flags=re.DOTALL
+                        ).strip()
+                    except Exception:
+                        pass
+
+                # Persist to session history
+                chat_session_store.append(session_id, "user", stamped_user_message)
+                chat_session_store.append(session_id, "assistant", full_content)
+
+                done_payload = {"type": "done", "full_content": full_content}
+                if action:
+                    done_payload["action"] = action
+                yield f"data: {_json.dumps(done_payload)}\n\n"
+            else:
+                yield f"data: {_json.dumps(event)}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.route("/api/chat/clear", methods=["POST"])

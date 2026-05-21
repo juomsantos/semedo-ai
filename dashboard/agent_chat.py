@@ -5,7 +5,7 @@ agent_chat.py — Chat agent with tool calling via Ollama.
 import sys
 import os
 from pathlib import Path
-from typing import List, Dict, Callable, Optional
+from typing import Generator, List, Dict, Callable, Optional
 
 # Add scripts to path — MUST be before importing shared modules
 project_root = Path(__file__).resolve().parent.parent
@@ -145,3 +145,116 @@ def call_chat_with_tools(
         pass
 
     return "Tool limit exceeded. Please try a simpler request."
+
+
+def stream_chat_with_tools(
+    model: str,
+    system_prompt: str,
+    history: List[Dict],
+    user_message: str,
+    max_tool_turns: int = 8,
+    options: Optional[dict] = None,
+    think: Optional[bool] = None,
+) -> Generator:
+    """
+    Streaming version of call_chat_with_tools.
+
+    Phase 1 runs the tool-calling loop non-streaming (tools execute fast and
+    the LLM response is tiny) yielding a ``tool_call`` event per dispatch.
+    Phase 2 streams the final LLM response, yielding ``thinking`` / ``token``
+    chunks, then a single ``done`` event with the complete assembled text.
+
+    Yields dicts — one of:
+      {"type": "tool_call", "name": str,  "args": dict}    — tool dispatched
+      {"type": "thinking",  "text": str}                    — reasoning chunk
+      {"type": "token",     "text": str}                    — content chunk
+      {"type": "done",      "full_content": str}            — stream finished
+      {"type": "error",     "message": str}                 — failure
+    """
+    client = OllamaClient()
+    tools = [rag_query, web_search, web_fetch]
+
+    messages: List[Dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    # ── Phase 1: non-streaming tool loop ──────────────────────────────────
+    for _turn in range(max_tool_turns):
+        try:
+            response = client.chat_with_tools(
+                model=model,
+                messages=messages,
+                tools=tools,
+                options=options,
+                think=think,
+            )
+        except OllamaError as e:
+            yield {"type": "error", "message": str(e)}
+            return
+
+        if response.get("type") == "text":
+            # LLM is done with tools — break to Phase 2 streaming call.
+            # We intentionally discard this text response and re-call the
+            # LLM via stream_response so the user sees tokens as they arrive.
+            break
+
+        if response.get("type") == "tool_call":
+            raw_message = response.get("raw_message")
+            tool_name = response.get("name", "unknown")
+            tool_input = response.get("arguments", {}) or {}
+
+            try:
+                if tool_name == "rag_query":
+                    tool_result = rag_query(tool_input.get("query", ""), tool_input.get("top_k", 5))
+                elif tool_name == "web_search":
+                    tool_result = web_search(tool_input.get("query", ""))
+                elif tool_name == "web_fetch":
+                    tool_result = web_fetch(tool_input.get("url", ""))
+                else:
+                    tool_result = f"Unknown tool: {tool_name}"
+            except Exception as e:
+                tool_result = f"Tool error: {str(e)}"
+
+            yield {"type": "tool_call", "name": tool_name, "args": tool_input}
+
+            if raw_message is not None:
+                messages.append(raw_message)
+            else:
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": tool_name, "arguments": tool_input}}],
+                })
+            messages.append({
+                "role": "tool",
+                "content": tool_result,
+                "tool_name": tool_name,
+            })
+            continue
+
+        # Unrecognized response shape — skip
+        continue
+
+    # ── Phase 2: stream the final response ────────────────────────────────
+    full_content = ""
+    try:
+        for chunk in client.stream_response(
+            model=model,
+            messages=messages,
+            options=options,
+            think=think,
+        ):
+            if chunk["thinking"]:
+                yield {"type": "thinking", "text": chunk["thinking"]}
+            if chunk["content"]:
+                full_content += chunk["content"]
+                yield {"type": "token", "text": chunk["content"]}
+            if chunk["done"]:
+                break
+    except OllamaError as e:
+        yield {"type": "error", "message": str(e)}
+        return
+
+    yield {"type": "done", "full_content": full_content}

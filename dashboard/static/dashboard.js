@@ -1379,6 +1379,9 @@ function escapeHtml(text) {
 
 let chatSessionId = null;
 let chatThinkingMode = false;
+let chatActiveStream = null;   // AbortController for the in-flight stream
+let _streamThinkingAccum = ''; // per-message thinking accumulator
+let _streamContentAccum  = ''; // per-message content accumulator
 
 function toggleThinkingMode() {
     chatThinkingMode = !chatThinkingMode;
@@ -1422,52 +1425,243 @@ function escapeHtml(text) {
 function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const message = input.value.trim();
-
     if (!message) return;
 
-    // Disable input while sending
-    input.disabled = true;
-    document.getElementById('chat-send-btn').disabled = true;
+    // Cancel any in-flight stream
+    if (chatActiveStream) {
+        chatActiveStream.abort();
+        chatActiveStream = null;
+    }
 
-    // Append user bubble
+    // Reset per-message accumulators
+    _streamThinkingAccum = '';
+    _streamContentAccum  = '';
+
+    input.disabled = true;
+    const sendBtn = document.getElementById('chat-send-btn');
+    sendBtn.disabled = true;
+
     appendChatBubble('user', message);
     input.value = '';
 
-    // Call API — include browser timestamp so the LLM knows when this message was sent
     const now = new Date();
     const isoTs = now.toISOString().slice(0, 16).replace('T', ' ') + ' ' +
         Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-    fetch('/api/chat', withAuth({
+    const controller = new AbortController();
+    chatActiveStream = controller;
+
+    // Create the assistant bubble structure upfront
+    const { toolsEl, thinkingEl, contentEl } = createStreamingBubble();
+
+    fetch('/api/chat/stream', withAuth({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, session_id: chatSessionId, timestamp: isoTs, thinking_mode: chatThinkingMode }),
+        body: JSON.stringify({
+            message,
+            session_id: chatSessionId,
+            timestamp: isoTs,
+            thinking_mode: chatThinkingMode,
+        }),
+        signal: controller.signal,
     }))
     .then(resp => {
         if (!resp.ok) {
             return resp.json().then(data => {
-                throw new Error(data.error || 'Chat failed');
+                throw new Error(data.error || 'Stream failed');
             });
         }
-        return resp.json();
-    })
-    .then(data => {
-        chatSessionId = data.session_id;
-        appendChatBubble('assistant', data.reply);
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        // Show task created badge if applicable
-        if (data.action && data.action.type === 'task_created') {
-            appendTaskBadge(data.action.task_id);
+        function readChunk() {
+            reader.read().then(({ done, value }) => {
+                if (done) return;
+                buffer += decoder.decode(value, { stream: true });
+                // SSE events are delimited by double newlines
+                const parts = buffer.split('\n\n');
+                buffer = parts.pop(); // keep the trailing incomplete chunk
+                for (const part of parts) {
+                    if (!part.trim()) continue;
+                    for (const line of part.split('\n')) {
+                        if (!line.startsWith('data: ')) continue;
+                        const raw = line.slice(6).trim();
+                        if (raw === '[DONE]') return;
+                        try {
+                            handleStreamEvent(
+                                JSON.parse(raw),
+                                toolsEl, thinkingEl, contentEl
+                            );
+                        } catch (_) { /* skip malformed JSON */ }
+                    }
+                }
+                readChunk();
+            }).catch(err => {
+                if (err.name !== 'AbortError') {
+                    contentEl.classList.remove('streaming');
+                    contentEl.classList.add('chat-stream-error');
+                    contentEl.textContent = `Stream error: ${err.message}`;
+                }
+            });
         }
+        readChunk();
     })
     .catch(err => {
-        appendChatBubble('error', `Error: ${err.message}`);
+        if (err.name !== 'AbortError') {
+            contentEl.classList.remove('streaming');
+            contentEl.classList.add('chat-stream-error');
+            contentEl.textContent = `Error: ${err.message}`;
+        }
     })
     .finally(() => {
+        chatActiveStream = null;
         input.disabled = false;
-        document.getElementById('chat-send-btn').disabled = false;
+        sendBtn.disabled = false;
         input.focus();
     });
+}
+
+// Handle a single SSE event object
+function handleStreamEvent(event, toolsEl, thinkingEl, contentEl) {
+    const chatContainer = document.getElementById('chat-messages');
+
+    if (event.type === 'meta') {
+        if (event.session_id) chatSessionId = event.session_id;
+        return;
+    }
+
+    if (event.type === 'tool_call') {
+        addToolCallPill(toolsEl, event.name, event.args || {});
+        return;
+    }
+
+    if (event.type === 'thinking') {
+        contentEl.classList.remove('waiting');
+        _streamThinkingAccum += event.text;
+        updateThinkingBlock(thinkingEl, _streamThinkingAccum);
+        return;
+    }
+
+    if (event.type === 'token') {
+        contentEl.classList.remove('waiting');
+        _streamContentAccum += event.text;
+        // Raw text while streaming; ::after pseudo-element adds the cursor
+        contentEl.textContent = _streamContentAccum;
+        contentEl.classList.add('streaming');
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        return;
+    }
+
+    if (event.type === 'done') {
+        contentEl.classList.remove('waiting');
+        contentEl.classList.remove('streaming');
+        // Render final markdown (replaces raw streamed text)
+        const finalContent = event.full_content || _streamContentAccum;
+        contentEl.classList.add('rendered');
+        contentEl.innerHTML = markdownToHtml(finalContent);
+        contentEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+        // Finalise thinking block label
+        if (_streamThinkingAccum) {
+            const summary = thinkingEl.querySelector('.chat-thinking-summary');
+            if (summary) summary.textContent = '💭 Thinking';
+        }
+        // Task badge
+        if (event.action && event.action.type === 'task_created') {
+            appendTaskBadge(event.action.task_id);
+        }
+        _streamThinkingAccum = '';
+        _streamContentAccum  = '';
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        return;
+    }
+
+    if (event.type === 'error') {
+        contentEl.classList.remove('waiting');
+        contentEl.classList.remove('streaming');
+        contentEl.classList.add('chat-stream-error');
+        contentEl.textContent = `Error: ${event.message}`;
+        _streamThinkingAccum = '';
+        _streamContentAccum  = '';
+        return;
+    }
+}
+
+// Build the assistant streaming bubble and return its sub-elements
+function createStreamingBubble() {
+    const container = document.getElementById('chat-messages');
+
+    const msg = document.createElement('div');
+    msg.className = 'chat-msg assistant';
+
+    const label = document.createElement('span');
+    label.className = 'chat-label';
+    label.textContent = 'LLM';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble';
+
+    // Tool calls row (hidden until first tool fires)
+    const toolsEl = document.createElement('div');
+    toolsEl.className = 'chat-tool-calls';
+    toolsEl.style.display = 'none';
+
+    // Collapsible thinking block (hidden until first thinking chunk)
+    const thinkingEl = document.createElement('details');
+    thinkingEl.className = 'chat-thinking';
+    thinkingEl.style.display = 'none';
+    const thinkingSummary = document.createElement('summary');
+    thinkingSummary.className = 'chat-thinking-summary';
+    thinkingSummary.textContent = '💭 Thinking…';
+    const thinkingBody = document.createElement('div');
+    thinkingBody.className = 'chat-thinking-body';
+    thinkingEl.appendChild(thinkingSummary);
+    thinkingEl.appendChild(thinkingBody);
+
+    // Main content area — starts in "waiting" state (animated dots)
+    const contentEl = document.createElement('div');
+    contentEl.className = 'chat-bubble-content waiting';
+
+    bubble.appendChild(toolsEl);
+    bubble.appendChild(thinkingEl);
+    bubble.appendChild(contentEl);
+
+    const time = document.createElement('span');
+    time.className = 'chat-time';
+    time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    msg.appendChild(label);
+    msg.appendChild(bubble);
+    msg.appendChild(time);
+    container.appendChild(msg);
+    container.scrollTop = container.scrollHeight;
+
+    return { msgEl: msg, toolsEl, thinkingEl, contentEl };
+}
+
+// Add a tool-call pill to the tools row
+function addToolCallPill(toolsEl, toolName, args) {
+    toolsEl.style.display = 'flex';
+    const pill = document.createElement('span');
+    pill.className = 'tool-pill';
+    const icons = { rag_query: '📚', web_search: '🔍', web_fetch: '🌐' };
+    pill.textContent = (icons[toolName] || '🔧') + ' ' + toolName.replace(/_/g, ' ');
+    const argStr = Object.entries(args)
+        .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+        .join(', ');
+    if (argStr) pill.title = argStr;
+    toolsEl.appendChild(pill);
+    document.getElementById('chat-messages').scrollTop =
+        document.getElementById('chat-messages').scrollHeight;
+}
+
+// Update the collapsible thinking block with accumulated text
+function updateThinkingBlock(thinkingEl, text) {
+    thinkingEl.style.display = 'block';
+    const body = thinkingEl.querySelector('.chat-thinking-body');
+    if (body) body.textContent = text;
+    document.getElementById('chat-messages').scrollTop =
+        document.getElementById('chat-messages').scrollHeight;
 }
 
 function appendChatBubble(role, content) {

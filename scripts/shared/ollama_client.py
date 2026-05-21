@@ -217,6 +217,48 @@ class OllamaClient:
         # Model returned a final text answer
         return {"type": "text", "content": message.content or ""}
 
+    def stream_response(
+        self,
+        model: str,
+        messages: list[dict],
+        options: Optional[dict] = None,
+        think: Optional[bool] = None,
+    ):
+        """
+        Stream a chat response from Ollama, yielding dicts:
+          {"thinking": str, "content": str, "done": bool}
+
+        Each chunk has exactly one non-empty field (thinking or content),
+        except the final chunk where done=True and both may be empty.
+        Raises OllamaError on connectivity/API failure.
+        """
+        chat_kwargs = {
+            "model": model,
+            "messages": messages,
+            "options": options or {},
+            "stream": True,
+        }
+        if think is not None:
+            chat_kwargs["think"] = think
+
+        try:
+            for chunk in self._client.chat(**chat_kwargs):
+                thinking_chunk = getattr(chunk.message, "thinking", None) or ""
+                content_chunk = chunk.message.content or ""
+                done = getattr(chunk, "done", False) or False
+                yield {"thinking": thinking_chunk, "content": content_chunk, "done": done}
+        except _ollama.ResponseError as e:
+            raise OllamaError(f"Ollama API error: {e}") from e
+        except Exception as e:
+            _msg = str(e).lower()
+            if "connect" in _msg or "connection" in _msg:
+                raise OllamaError(
+                    f"Cannot connect to Ollama at {self.base_url}. Is it running?"
+                )
+            if "timeout" in _msg or "timed out" in _msg:
+                raise OllamaError(f"Ollama request timed out after {self.timeout}s.")
+            raise OllamaError(f"Ollama error: {e}") from e
+
     def is_available(self) -> bool:
         """Return True if Ollama is reachable.
 
