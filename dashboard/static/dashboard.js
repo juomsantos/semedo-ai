@@ -1385,14 +1385,13 @@ let _streamContentAccum  = ''; // per-message content accumulator
 
 function toggleThinkingMode() {
     chatThinkingMode = !chatThinkingMode;
-    const btn = document.getElementById('chat-think-toggle');
-    if (chatThinkingMode) {
-        btn.textContent = '🧠 Thinking';
-        btn.classList.add('active');
-    } else {
-        btn.textContent = '⚡ Standard';
-        btn.classList.remove('active');
-    }
+    const toggle = document.getElementById('chat-think-toggle');
+    const icon   = document.getElementById('think-icon');
+    toggle.classList.toggle('active', chatThinkingMode);
+    if (icon) icon.textContent = chatThinkingMode ? '🧠' : '⚡';
+    toggle.title = chatThinkingMode
+        ? 'Thinking: deep reasoning for complex questions. Click to switch to Standard.'
+        : 'Standard: fast responses. Click to switch to Thinking.';
 }
 
 // ── marked setup (runs once) ─────────────────────────────────────────────

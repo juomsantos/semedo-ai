@@ -7,8 +7,9 @@
     <title>AI Team Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css">
-    <!-- Highlight.js for code syntax highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <!-- Highlight.js themes — one active at a time, swapped by _syncHljsTheme() -->
+    <link id="hljs-dark-theme"  rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"  media="all">
+    <link id="hljs-light-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" media="not all">
 </head>
 <body>
 
@@ -243,11 +244,12 @@
                     placeholder="Ask about tasks, pipeline status, research questions, or create new tasks… (Ctrl+Enter to send)"
                     rows="3"></textarea>
                 <div class="chat-actions">
-                    <button id="chat-think-toggle" class="btn-ghost chat-mode-toggle"
+                    <div id="chat-think-toggle" class="think-toggle"
                         onclick="toggleThinkingMode()"
                         title="Standard: fast responses. Thinking: deep reasoning for complex questions.">
-                        ⚡ Standard
-                    </button>
+                        <div class="think-track"><div class="think-thumb"></div></div>
+                        <span class="think-icon" id="think-icon">⚡</span>
+                    </div>
                     <button id="chat-send-btn" class="btn-primary" onclick="sendChatMessage()">Send</button>
                 </div>
             </div>
@@ -333,6 +335,15 @@
     </div>
 
     <script>
+    // ── hljs theme sync ───────────────────────────────────────
+    function _syncHljsTheme(theme) {
+        const dark  = document.getElementById('hljs-dark-theme');
+        const light = document.getElementById('hljs-light-theme');
+        if (!dark || !light) return;
+        dark.media  = theme === 'light' ? 'not all' : 'all';
+        light.media = theme === 'light' ? 'all'     : 'not all';
+    }
+
     // ── Theme toggle ──────────────────────────────────────────
     function toggleTheme() {
         const html = document.documentElement;
@@ -342,6 +353,7 @@
         document.getElementById('theme-label').textContent = isLight ? 'A — Dark' : 'B — Light';
         document.getElementById('toggle-icon').textContent  = isLight ? '🌙' : '☀️';
         try { localStorage.setItem('dashboard-theme', next); } catch(e) {}
+        _syncHljsTheme(next);
     }
 
     // Restore persisted theme before first paint
@@ -352,6 +364,7 @@
                 document.documentElement.setAttribute('data-theme', saved);
             }
         } catch(e) {}
+        _syncHljsTheme(document.documentElement.getAttribute('data-theme') || 'dark');
     })();
 
     // Sync toggle label/icon after DOM ready
@@ -361,6 +374,7 @@
         const icon  = document.getElementById('toggle-icon');
         if (label) label.textContent = saved === 'light' ? 'B — Light' : 'A — Dark';
         if (icon)  icon.textContent  = saved === 'light' ? '☀️' : '🌙';
+        _syncHljsTheme(saved);
     });
     </script>
 
