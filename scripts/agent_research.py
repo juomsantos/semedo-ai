@@ -79,6 +79,7 @@ def run_agentic_loop(
     """
     search_turns = 0  # web_search calls used
     fetch_turns  = 0  # web_fetch calls used
+    rag_turns    = 0  # rag_query calls used
     active_tools = list(TOOLS)  # shrinks as per-tool limits are hit
 
     for turn in range(MAX_TOOL_TURNS):
@@ -92,7 +93,7 @@ def run_agentic_loop(
 
         if result["type"] == "text":
             log_tokens_safe(AGENT_NAME, task_id, client)
-            log.info(f"[{task_id}] Final answer received (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS})")
+            log.info(f"[{task_id}] Final answer received (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS}, rag={rag_turns}/{MAX_RAG_TURNS})")
             return result["content"]
 
         if result["type"] == "tool_call":
@@ -129,11 +130,26 @@ def run_agentic_loop(
                     active_tools = [t for t in active_tools if t is not web_fetch]
                     log.info(f"[{task_id}] web_fetch limit reached ({MAX_FETCH_TURNS}) — removed from active tools")
 
+            elif tool_name == "rag_query":
+                rag_turns += 1
+                query = arguments.get("query", "").strip()
+                top_k = arguments.get("top_k", 5)
+                if not query:
+                    log.warning(f"[{task_id}] rag_query called with empty query — skipping")
+                    tool_result = "ERROR: 'query' parameter was empty. Please provide a search query."
+                else:
+                    log.info(f"[{task_id}] rag_query({rag_turns}/{MAX_RAG_TURNS}): {query!r}")
+                    tool_result = rag_query(query, top_k)
+                    log.info(f"[{task_id}] rag_query returned {len(tool_result)} chars")
+                if rag_turns >= MAX_RAG_TURNS:
+                    active_tools = [t for t in active_tools if t is not rag_query]
+                    log.info(f"[{task_id}] rag_query limit reached ({MAX_RAG_TURNS}) — removed from active tools")
+
             else:
                 log.warning(f"[{task_id}] Model called unknown tool '{tool_name}' — skipping")
                 tool_result = f"ERROR: Tool '{tool_name}' is not available."
 
-            if tool_result.startswith("ERROR:") and tool_name in ("web_search", "web_fetch"):
+            if tool_result.startswith("ERROR:") and tool_name in ("web_search", "web_fetch", "rag_query"):
                 # Log the failure but pass the error back to the LLM so it can
                 # decide how to proceed (retry with a different query, skip the
                 # fetch, answer from existing knowledge, etc.).

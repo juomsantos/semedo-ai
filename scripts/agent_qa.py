@@ -258,6 +258,7 @@ Please review the latest code (and prior work context if provided) to determine 
         empty_response_retries = 0
         search_turns = 0
         fetch_turns  = 0
+        rag_turns    = 0
         active_tools = list(QA_TOOLS)
 
         for turn in range(MAX_TOOL_TURNS):
@@ -272,7 +273,7 @@ Please review the latest code (and prior work context if provided) to determine 
             if result["type"] == "text":
                 log_tokens_safe(AGENT_NAME, task_id, client)
                 response = result["content"]
-                log.info(f"QA review received ({len(response)} chars) after {turn} tool turn(s) (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS})")
+                log.info(f"QA review received ({len(response)} chars) after {turn} tool turn(s) (search={search_turns}/{MAX_SEARCH_TURNS}, fetch={fetch_turns}/{MAX_FETCH_TURNS}, rag={rag_turns}/{MAX_RAG_TURNS})")
                 break
 
             if result["type"] == "tool_call":
@@ -307,11 +308,26 @@ Please review the latest code (and prior work context if provided) to determine 
                         active_tools = [t for t in active_tools if t is not web_fetch]
                         log.info(f"web_fetch limit reached ({MAX_FETCH_TURNS}) — removed from active tools")
 
+                elif tool_name == "rag_query":
+                    rag_turns += 1
+                    query = arguments.get("query", "").strip()
+                    top_k = arguments.get("top_k", 5)
+                    if not query:
+                        log.warning(f"rag_query called with empty query — skipping")
+                        tool_result = "ERROR: 'query' parameter was empty. Please provide a search query."
+                    else:
+                        log.info(f"rag_query({rag_turns}/{MAX_RAG_TURNS}): {query!r}")
+                        tool_result = rag_query(query, top_k)
+                        log.info(f"rag_query returned {len(tool_result)} chars")
+                    if rag_turns >= MAX_RAG_TURNS:
+                        active_tools = [t for t in active_tools if t is not rag_query]
+                        log.info(f"rag_query limit reached ({MAX_RAG_TURNS}) — removed from active tools")
+
                 else:
                     log.warning(f"Model called unknown tool '{tool_name}' — skipping")
                     tool_result = f"ERROR: Tool '{tool_name}' is not available."
 
-                if tool_result.startswith("ERROR:") and tool_name in ("web_search", "web_fetch"):
+                if tool_result.startswith("ERROR:") and tool_name in ("web_search", "web_fetch", "rag_query"):
                     # Log the failure but pass the error back to the LLM so it can
                     # decide how to proceed (retry, skip, or review without the lookup).
                     log.warning(f"{tool_name} error (passing to LLM): {tool_result}")
