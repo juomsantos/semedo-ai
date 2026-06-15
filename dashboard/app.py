@@ -33,6 +33,7 @@ from task_monitor import TaskMonitor
 from chat_session import ChatSessionStore
 from chat_context import build_base_snapshot, get_deep_task_context, extract_task_id
 from agent_chat import call_chat_with_tools, stream_chat_with_tools
+from ollama_api_logger import OllamaAPILogger
 from shared.ollama_client import OllamaError
 
 # Determine project root (parent of dashboard)
@@ -129,6 +130,9 @@ monitor = TaskMonitor(PROJECT_ROOT)
 # Initialize chat components
 chat_session_store = ChatSessionStore(max_history_turns=20)
 
+# Initialize Ollama API logger
+ollama_api_logger = OllamaAPILogger(PROJECT_ROOT / "logs" / "dashboard")
+
 # Load chat system prompt template
 chat_system_prompt_path = dashboard_dir / "chat_system_prompt.md"
 CHAT_SYSTEM_PROMPT_TEMPLATE = ""
@@ -152,26 +156,102 @@ DEFAULT_CHAT_OPTIONS_THINKING = {
 }
 
 # Load config for chat settings
+CHAT_MODELS = {}
+CHAT_MODEL = DEFAULT_CHAT_MODEL
+CHAT_TIMEOUT = DEFAULT_CHAT_TIMEOUT_S
+CHAT_MAX_TOOL_TURNS = DEFAULT_CHAT_MAX_TOOL_TURNS
+CHAT_OPTIONS_STANDARD = DEFAULT_CHAT_OPTIONS_STANDARD
+CHAT_OPTIONS_THINKING = DEFAULT_CHAT_OPTIONS_THINKING
+
 try:
     config = _load_config()
     chat_config = config._config.get("chat", {})
-    CHAT_MODEL = chat_config.get("model", config.agent_model("orchestrator") or DEFAULT_CHAT_MODEL)
     CHAT_TIMEOUT = chat_config.get("timeout", DEFAULT_CHAT_TIMEOUT_S)
     CHAT_MAX_TOOL_TURNS = chat_config.get("max_tool_turns", DEFAULT_CHAT_MAX_TOOL_TURNS)
-    CHAT_OPTIONS_STANDARD = chat_config.get("options_standard", DEFAULT_CHAT_OPTIONS_STANDARD)
-    CHAT_OPTIONS_THINKING = chat_config.get("options_thinking", DEFAULT_CHAT_OPTIONS_THINKING)
+
+    # Parse models array (new structure) with fallback to old single model
+    models_list = chat_config.get("models", [])
+    if models_list:
+        # New structure: chat.models is an array
+        for model_config in models_list:
+            model_name = model_config.get("name", "")
+            if model_name:
+                CHAT_MODELS[model_name] = {
+                    "label": model_config.get("label", model_name),
+                    "is_default": model_config.get("is_default", False),
+                    "options_standard": model_config.get("options_standard", DEFAULT_CHAT_OPTIONS_STANDARD),
+                    "options_thinking": model_config.get("options_thinking", DEFAULT_CHAT_OPTIONS_THINKING),
+                }
+                if model_config.get("is_default"):
+                    CHAT_MODEL = model_name
+    else:
+        # Backward compatibility: old structure with single chat.model
+        old_model = chat_config.get("model")
+        if old_model:
+            CHAT_MODEL = old_model
+            CHAT_MODELS[old_model] = {
+                "label": old_model,
+                "is_default": True,
+                "options_standard": chat_config.get("options_standard", DEFAULT_CHAT_OPTIONS_STANDARD),
+                "options_thinking": chat_config.get("options_thinking", DEFAULT_CHAT_OPTIONS_THINKING),
+            }
+        else:
+            # No models defined, use defaults
+            CHAT_MODELS[DEFAULT_CHAT_MODEL] = {
+                "label": DEFAULT_CHAT_MODEL,
+                "is_default": True,
+                "options_standard": DEFAULT_CHAT_OPTIONS_STANDARD,
+                "options_thinking": DEFAULT_CHAT_OPTIONS_THINKING,
+            }
+            CHAT_MODEL = DEFAULT_CHAT_MODEL
+
+    # Set current chat options based on the default model
+    if CHAT_MODEL in CHAT_MODELS:
+        CHAT_OPTIONS_STANDARD = CHAT_MODELS[CHAT_MODEL]["options_standard"]
+        CHAT_OPTIONS_THINKING = CHAT_MODELS[CHAT_MODEL]["options_thinking"]
 except Exception:
+    CHAT_MODELS[DEFAULT_CHAT_MODEL] = {
+        "label": DEFAULT_CHAT_MODEL,
+        "is_default": True,
+        "options_standard": DEFAULT_CHAT_OPTIONS_STANDARD,
+        "options_thinking": DEFAULT_CHAT_OPTIONS_THINKING,
+    }
     CHAT_MODEL = DEFAULT_CHAT_MODEL
-    CHAT_TIMEOUT = DEFAULT_CHAT_TIMEOUT_S
-    CHAT_MAX_TOOL_TURNS = DEFAULT_CHAT_MAX_TOOL_TURNS
-    CHAT_OPTIONS_STANDARD = DEFAULT_CHAT_OPTIONS_STANDARD
-    CHAT_OPTIONS_THINKING = DEFAULT_CHAT_OPTIONS_THINKING
+
+
+def _get_model_config(model_name: str) -> dict:
+    """Get options for a given model name, with fallback to defaults."""
+    if model_name in CHAT_MODELS:
+        return {
+            "options_standard": CHAT_MODELS[model_name]["options_standard"],
+            "options_thinking": CHAT_MODELS[model_name]["options_thinking"],
+        }
+    # Fallback to defaults if model not found
+    return {
+        "options_standard": DEFAULT_CHAT_OPTIONS_STANDARD,
+        "options_thinking": DEFAULT_CHAT_OPTIONS_THINKING,
+    }
 
 
 @app.route("/")
 def index():
     """Serve dashboard UI with the per-process token embedded as a meta tag."""
     return render_template("index.html", dashboard_token=DASHBOARD_TOKEN)
+
+
+@app.route("/api/models", methods=["GET"])
+@_json_error_envelope
+def get_models():
+    """Get available chat models."""
+    models_list = [
+        {
+            "name": name,
+            "label": config["label"],
+            "is_default": config["is_default"],
+        }
+        for name, config in CHAT_MODELS.items()
+    ]
+    return jsonify({"models": models_list}), 200
 
 
 @app.route("/api/status")
@@ -494,6 +574,38 @@ def rag_status():
 
 
 # ---------------------------------------------------------------------------
+# Ollama API Logging
+# ---------------------------------------------------------------------------
+
+@app.route("/api/ollama/logs", methods=["GET"])
+@_json_error_envelope
+def get_ollama_logs():
+    """Get Ollama API logs, optionally filtered by session."""
+    limit = request.args.get("limit", 100, type=int)
+    session_id = request.args.get("session_id", None)
+    logs = ollama_api_logger.read_logs(limit=limit, session_id=session_id)
+    return jsonify({"logs": logs, "count": len(logs)}), 200
+
+
+@app.route("/api/ollama/logs/<session_id>", methods=["GET"])
+@_json_error_envelope
+def get_ollama_logs_for_session(session_id):
+    """Get Ollama API logs for a specific session."""
+    limit = request.args.get("limit", 100, type=int)
+    logs = ollama_api_logger.read_logs(limit=limit, session_id=session_id)
+    return jsonify({"session_id": session_id, "logs": logs, "count": len(logs)}), 200
+
+
+@app.route("/api/ollama/logs/clear", methods=["POST"])
+@require_dashboard_token
+@_json_error_envelope
+def clear_ollama_logs():
+    """Clear all Ollama API logs."""
+    ollama_api_logger.clear_logs()
+    return jsonify({"status": "cleared"}), 200
+
+
+# ---------------------------------------------------------------------------
 # Chat API
 # ---------------------------------------------------------------------------
 
@@ -507,9 +619,13 @@ def chat():
     session_id = body.get("session_id")
     client_timestamp = body.get("timestamp", "").strip()  # ISO string from browser
     thinking_mode = bool(body.get("thinking_mode", False))
+    requested_model = body.get("model", CHAT_MODEL).strip()
 
     if not user_message:
         return jsonify({"error": "message is required"}), 400
+
+    # Validate and use requested model, fallback to default if invalid
+    selected_model = requested_model if requested_model in CHAT_MODELS else CHAT_MODEL
 
     # Create or retrieve session
     if not session_id:
@@ -532,13 +648,16 @@ def chat():
         deep_context = get_deep_task_context(task_id, PROJECT_ROOT)
         system_prompt = system_prompt.replace("{PIPELINE_SNAPSHOT}", f"{base_snapshot}{deep_context}")
 
+    # Get model-specific options
+    model_config = _get_model_config(selected_model)
+    chat_options = model_config["options_thinking"] if thinking_mode else model_config["options_standard"]
+
     # Call LLM with tools — pass the timestamped message so the model sees timing.
     # OllamaError is mapped explicitly to 503 (upstream LLM unavailable) before
     # the envelope decorator would otherwise turn it into a 500.
-    chat_options = CHAT_OPTIONS_THINKING if thinking_mode else CHAT_OPTIONS_STANDARD
     try:
         reply = call_chat_with_tools(
-            model=CHAT_MODEL,
+            model=selected_model,
             system_prompt=system_prompt,
             history=history,
             user_message=stamped_user_message,
@@ -619,9 +738,13 @@ def chat_stream():
     session_id = body.get("session_id")
     client_timestamp = body.get("timestamp", "").strip()
     thinking_mode = bool(body.get("thinking_mode", False))
+    requested_model = body.get("model", CHAT_MODEL).strip()
 
     if not user_message:
         return jsonify({"error": "message is required"}), 400
+
+    # Validate and use requested model, fallback to default if invalid
+    selected_model = requested_model if requested_model in CHAT_MODELS else CHAT_MODEL
 
     if not session_id:
         session_id = chat_session_store.new_session()
@@ -644,7 +767,9 @@ def chat_stream():
         deep_context = get_deep_task_context(task_id_ref, PROJECT_ROOT)
         system_prompt = system_prompt.replace("{PIPELINE_SNAPSHOT}", f"{base_snapshot}{deep_context}")
 
-    chat_options = CHAT_OPTIONS_THINKING if thinking_mode else CHAT_OPTIONS_STANDARD
+    # Get model-specific options
+    model_config = _get_model_config(selected_model)
+    chat_options = model_config["options_thinking"] if thinking_mode else model_config["options_standard"]
 
     def generate():
         # First event: session metadata so the client can store the session id
@@ -652,7 +777,7 @@ def chat_stream():
 
         full_content = ""
         for event in stream_chat_with_tools(
-            model=CHAT_MODEL,
+            model=selected_model,
             system_prompt=system_prompt,
             history=history,
             user_message=stamped_user_message,

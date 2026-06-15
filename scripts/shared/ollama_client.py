@@ -217,36 +217,88 @@ class OllamaClient:
         # Model returned a final text answer
         return {"type": "text", "content": message.content or ""}
 
-    def stream_response(
+    def stream_with_tools(
         self,
         model: str,
         messages: list[dict],
+        tools: Optional[list[Tool]] = None,
         options: Optional[dict] = None,
         think: Optional[bool] = None,
     ):
         """
-        Stream a chat response from Ollama, yielding dicts:
-          {"thinking": str, "content": str, "done": bool}
+        Stream a chat response from Ollama with optional tool calling.
 
-        Each chunk has exactly one non-empty field (thinking or content),
-        except the final chunk where done=True and both may be empty.
+        Yields one dict per chunk:
+          {"thinking": str, "content": str, "tool_calls": list[dict], "done": bool}
+
+        - ``thinking`` / ``content`` are token fragments (one is usually non-empty
+          per chunk; both may be empty on the final ``done`` chunk).
+        - ``tool_calls`` is the list of tool calls present *in that chunk*, each
+          normalized to ``{"name": str, "arguments": dict}`` (arguments JSON-decoded
+          if the server sent them as a string). It is ``[]`` on chunks without a
+          tool call. The caller accumulates these across chunks, dispatches the
+          tools, appends the results, and calls this method again for the next turn.
+
+        Passing ``tools=[]`` or ``None`` disables tool calling (pure streaming),
+        which is how a final, tool-free answer is forced.
+
+        Unlike the non-streaming :meth:`chat_with_tools`, this streams the answer
+        token-by-token *and* surfaces tool calls in the same pass — so a caller no
+        longer needs a separate non-streaming probe call to detect completion.
+
         Raises OllamaError on connectivity/API failure.
         """
         chat_kwargs = {
             "model": model,
             "messages": messages,
+            "tools": tools if tools else None,
             "options": options or {},
             "stream": True,
         }
         if think is not None:
             chat_kwargs["think"] = think
 
+        prompt_tokens = 0
+        completion_tokens = 0
         try:
             for chunk in self._client.chat(**chat_kwargs):
-                thinking_chunk = getattr(chunk.message, "thinking", None) or ""
-                content_chunk = chunk.message.content or ""
+                message = chunk.message
+                thinking_chunk = getattr(message, "thinking", None) or ""
+                content_chunk = message.content or ""
                 done = getattr(chunk, "done", False) or False
-                yield {"thinking": thinking_chunk, "content": content_chunk, "done": done}
+
+                # Normalize any tool calls in this chunk to plain dicts.
+                tool_calls = []
+                raw_tool_calls = getattr(message, "tool_calls", None)
+                if raw_tool_calls:
+                    for call in raw_tool_calls:
+                        name = call.function.name
+                        arguments = call.function.arguments
+                        # arguments may arrive as a JSON string in some versions
+                        if isinstance(arguments, str):
+                            try:
+                                arguments = json.loads(arguments)
+                            except json.JSONDecodeError:
+                                arguments = {"raw": arguments}
+                        tool_calls.append({"name": name, "arguments": arguments})
+
+                # Token counts are reported on the terminal chunk.
+                if getattr(chunk, "prompt_eval_count", None):
+                    prompt_tokens = chunk.prompt_eval_count
+                if getattr(chunk, "eval_count", None):
+                    completion_tokens = chunk.eval_count
+
+                yield {
+                    "thinking": thinking_chunk,
+                    "content": content_chunk,
+                    "tool_calls": tool_calls,
+                    "done": done,
+                }
+
+            self.last_token_counts = {
+                "prompt": prompt_tokens,
+                "completion": completion_tokens,
+            }
         except _ollama.ResponseError as e:
             raise OllamaError(f"Ollama API error: {e}") from e
         except Exception as e:

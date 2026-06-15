@@ -2013,6 +2013,207 @@ strong { font-weight: 600; }
 .log-lagent { color: var(--s-completed); font-weight: 500; }
 .log-msg   { color: var(--text-code); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; }
 
+/* ─── OLLAMA API LOGS ──────────────────────────────────────────── */
+.ollama-log-entry {
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--r-sm);
+  margin-bottom: 8px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.ollama-log-header {
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-hairline);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  align-items: center;
+}
+
+.ollama-timestamp {
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 80px;
+}
+
+.ollama-direction {
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ollama-request .ollama-direction {
+  background: rgba(139,92,246,0.20);
+  color: #a78bfa;
+}
+
+.ollama-response .ollama-direction {
+  background: rgba(16,185,129,0.20);
+  color: #34d399;
+}
+
+.ollama-stream .ollama-direction {
+  background: rgba(56,189,248,0.20);
+  color: #7dd3fc;
+}
+
+.ollama-error .ollama-direction {
+  background: rgba(239,68,68,0.20);
+  color: #f87171;
+}
+
+.ollama-session {
+  color: var(--text-muted);
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.ollama-log-payload {
+  padding: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.ollama-log-payload pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.ollama-log-payload code {
+  color: var(--text-code);
+  background: transparent;
+  padding: 0;
+}
+
+/* ─── OLLAMA API LOGS — GROUPED / COLLAPSIBLE ─────────────────────
+   Each request and its responses + stream chunks are bundled into one
+   group; every part is a collapsed <details> so the viewer stays compact.
+   ─────────────────────────────────────────────────────────────── */
+.ollama-log-group {
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--r-sm);
+  margin-bottom: 8px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.ollama-group-header {
+  display: flex;
+  gap: 12px;
+  padding: 7px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-hairline);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  align-items: center;
+}
+
+.ollama-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+}
+
+/* Collapsible row (request / response / stream / error) */
+.ollama-item {
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--r-sm);
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.ollama-item > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  list-style: none;
+  user-select: none;
+}
+
+.ollama-item > summary::-webkit-details-marker { display: none; }
+
+.ollama-item > summary::before {
+  content: '▸';
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.12s ease;
+  display: inline-block;
+}
+
+.ollama-item[open] > summary::before { transform: rotate(90deg); }
+
+.ollama-item > summary:hover { background: var(--bg-hover); }
+
+.ollama-sub {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ollama-item-body {
+  padding: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-hairline);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.ollama-item-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.ollama-item-body code {
+  color: var(--text-code);
+  background: transparent;
+  padding: 0;
+}
+
+/* Reconstructed streamed text */
+.ollama-stream-text {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text-code);
+  line-height: 1.5;
+}
+
+.ollama-substream {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: 8px;
+}
+
+.ollama-substream > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Log controls */
+.log-controls {
+  display: flex;
+  gap: 8px;
+}
+
 /* ─── AGENT STATS — MOCKUP CELLS ──────────────────────────────── */
 .agent-cell {
   display: flex;
@@ -2306,4 +2507,38 @@ details.chat-thinking[open] > .chat-thinking-summary::before {
 .chat-stream-error {
   color: var(--s-failed);
   font-size: 12.5px;
+}
+
+/* ─── CHAT HEADER CONTROLS ──────────────────────────────────── */
+
+.chat-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-model-select {
+  padding: 7px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast), background var(--t-normal);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238e8eae' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+
+.chat-model-select:hover {
+  border-color: var(--border-strong);
+}
+
+.chat-model-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
 }

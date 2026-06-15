@@ -577,7 +577,7 @@ All LLM calls go through `scripts/shared/ollama_client.py` (backed by the `ollam
 ollama.Client(host=...).chat(model, messages, options)
 ```
 
-**Tool-calling loop** (`OllamaClient.chat_with_tools()`) — used by research, QA, and the dashboard chat tool-phase. Tools are passed as **Python callables**: the `ollama` library introspects type annotations and docstrings to auto-generate JSON schemas — no manual tool-definition dicts needed.
+**Tool-calling loop** (`OllamaClient.chat_with_tools()`) — non-streaming; used by research and QA. Tools are passed as **Python callables**: the `ollama` library introspects type annotations and docstrings to auto-generate JSON schemas — no manual tool-definition dicts needed.
 
 ```python
 result = client.chat_with_tools(model, messages, tools=[web_search, web_fetch, rag_query])
@@ -585,14 +585,14 @@ result = client.chat_with_tools(model, messages, tools=[web_search, web_fetch, r
 
 Returns `{"type": "text", ...}` or `{"type": "tool_call", "name": ..., "arguments": {...}, "raw_message": <Message>}`. The agent executes the tool, appends results to message history, and loops until a text response is received or the turn limit is hit.
 
-**Streaming response** (`OllamaClient.stream_response()`) — used exclusively by the dashboard chat for the final LLM response after the tool loop completes:
+**Streaming tool loop** (`OllamaClient.stream_with_tools()`) — streaming *with* tool calling in a single pass; used by the dashboard chat:
 
 ```python
-for chunk in client.stream_response(model, messages, options, think):
-    # chunk = {"thinking": str, "content": str, "done": bool}
+for chunk in client.stream_with_tools(model, messages, tools=[...], options=options, think=think):
+    # chunk = {"thinking": str, "content": str, "tool_calls": list[dict], "done": bool}
 ```
 
-Called with `stream=True`; each chunk carries either a `thinking` fragment (model reasoning, only when `think=True`) or a `content` fragment (response token), plus a `done` flag on the last chunk. The dashboard's `stream_chat_with_tools()` generator calls `chat_with_tools()` for tool dispatch (non-streaming — fast) and then switches to `stream_response()` for the final answer so the browser receives tokens as they are generated.
+Called with `stream=True` and `tools=...`; each chunk carries a `thinking` fragment (model reasoning, only when `think=True`), a `content` fragment (response token), and/or `tool_calls` (normalized `{"name", "arguments"}` dicts) when the model invokes a tool, plus a `done` flag on the last chunk. The dashboard's `stream_chat_with_tools()` generator runs one streaming call per turn: it streams tokens live, and if a turn yields tool calls it dispatches them and streams the next turn. The first turn with no tool calls *is* the final answer — there is no separate non-streaming probe call and no discarded generation. Passing `tools=[]` disables tool calling (pure streaming), which is how a tool-free final answer is forced at the turn limit.
 
 **Web tools** (`scripts/shared/web_search.py`):
 

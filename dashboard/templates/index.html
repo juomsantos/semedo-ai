@@ -138,16 +138,26 @@
         <!-- Logs Tab -->
         <section id="tab-logs" class="tab-content">
             <div class="section-hdr">
-                <span class="section-title">Agent Logs</span>
-                <select id="log-agent-select" class="select-dark">
-                    <option value="orchestrator">Orchestrator</option>
-                    <option value="coder">Coder</option>
-                    <option value="research">Research</option>
-                    <option value="qa">QA</option>
-                    <option value="claude-code">Claude Code</option>
-                    <option value="scheduler">Scheduler</option>
-                    <option value="rag-api">RAG API</option>
-                </select>
+                <span class="section-title">Logs</span>
+                <div class="log-controls">
+                    <select id="log-type-select" class="select-dark" onchange="switchLogType(this.value)">
+                        <option value="agent">Agent Logs</option>
+                        <option value="ollama">Ollama API Logs</option>
+                    </select>
+                    <select id="log-agent-select" class="select-dark" onchange="loadAgentLogs(this.value)">
+                        <option value="orchestrator">Orchestrator</option>
+                        <option value="coder">Coder</option>
+                        <option value="research">Research</option>
+                        <option value="qa">QA</option>
+                        <option value="claude-code">Claude Code</option>
+                        <option value="scheduler">Scheduler</option>
+                        <option value="rag-api">RAG API</option>
+                    </select>
+                    <select id="log-session-select" class="select-dark" style="display:none;" onchange="loadOllamaLogs(this.value)">
+                        <option value="">All Sessions</option>
+                    </select>
+                    <button class="btn-ghost" onclick="clearLogs()">Clear</button>
+                </div>
             </div>
             <div id="logs-container" class="log-stream">
                 <div id="logs-list" class="log-inner">
@@ -236,7 +246,12 @@
         <section id="tab-chat" class="tab-content">
             <div class="section-hdr">
                 <span class="section-title">Chat with LLM</span>
-                <button class="btn-ghost" onclick="clearChatHistory()">Clear history</button>
+                <div class="chat-header-controls">
+                    <select id="chat-model-select" class="chat-model-select">
+                        <option value="">Loading models...</option>
+                    </select>
+                    <button class="btn-ghost" onclick="clearChatHistory()">Clear history</button>
+                </div>
             </div>
             <div id="chat-messages" class="chat-messages"></div>
             <div class="chat-input-row">

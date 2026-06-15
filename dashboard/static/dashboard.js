@@ -61,11 +61,6 @@ function setupEventListeners() {
     // History filter
     document.getElementById('history-filter').addEventListener('change', updateHistoryTasks);
 
-    // Log agent selection
-    document.getElementById('log-agent-select').addEventListener('change', (e) => {
-        updateLogs(e.target.value);
-    });
-
     // Submit task form
     const submitForm = document.getElementById('submit-task-form');
     if (submitForm) {
@@ -184,10 +179,18 @@ async function updateDashboard() {
             await updateAgentStats();
         }
 
-        // Update logs if visible
+        // Update logs if visible — respect the selected log type so the poll
+        // loop doesn't clobber Ollama API logs with agent logs every cycle.
         if (document.getElementById('tab-logs').classList.contains('active')) {
-            const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
-            await updateLogs(selectedAgent);
+            const logTypeSelect = document.getElementById('log-type-select');
+            const selectedLogType = logTypeSelect ? logTypeSelect.value : 'agent';
+            if (selectedLogType === 'ollama') {
+                const sessionSelect = document.getElementById('log-session-select');
+                await loadOllamaLogs(sessionSelect ? sessionSelect.value : '');
+            } else {
+                const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
+                await updateLogs(selectedAgent);
+            }
         }
 
         // Update timestamp
@@ -470,6 +473,10 @@ function renderLogLine(raw) {
     </div>`;
 }
 
+// Tracks the last-rendered log markup so polling can skip identical re-renders
+// (re-rendering every 2s reset the user's scroll position and made logs unusable).
+let _lastLogsHtml = '';
+
 // Update logs for a specific agent
 async function updateLogs(agent) {
     try {
@@ -477,16 +484,35 @@ async function updateLogs(agent) {
         const data = await response.json();
 
         const container = document.getElementById('logs-list');
+        const scroller = container.parentElement;
 
         if (!data.logs || data.logs.length === 0) {
-            container.innerHTML = '<p class="no-data">No logs available for ' + agent + '</p>';
+            const emptyHtml = '<p class="no-data">No logs available for ' + agent + '</p>';
+            if (container.innerHTML !== emptyHtml) container.innerHTML = emptyHtml;
+            _lastLogsHtml = '';
             return;
         }
 
-        container.innerHTML = [...data.logs].reverse().map(renderLogLine).join('');
+        const html = [...data.logs].reverse().map(renderLogLine).join('');
+        const kindKey = 'agent:' + agent;
+        const kindChanged = container.dataset.logKind !== kindKey;
 
-        // Latest entries are now at the top — scroll to top
-        container.parentElement.scrollTop = 0;
+        // Unchanged content for the same view — leave the DOM (and scroll) alone.
+        if (html === _lastLogsHtml && !kindChanged) return;
+
+        const prevTop = scroller.scrollTop;
+        const prevHeight = scroller.scrollHeight;
+        container.innerHTML = html;
+        container.dataset.logKind = kindKey;
+        _lastLogsHtml = html;
+
+        // Reset to top only when the view itself changed (agent switch / tab open).
+        // On a routine poll refresh, preserve the user's view: new entries are
+        // prepended at the top, so add the height gained above to scrollTop to
+        // keep the same log lines in place instead of letting them shift down.
+        scroller.scrollTop = kindChanged
+            ? 0
+            : prevTop + (scroller.scrollHeight - prevHeight);
     } catch (error) {
         console.error('Error updating logs:', error);
         const container = document.getElementById('logs-list');
@@ -1020,10 +1046,22 @@ function switchTab(tabName) {
     } else if (tabName === 'approvals') {
         updateApprovals();
     } else if (tabName === 'logs') {
-        const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
-        updateLogs(selectedAgent);
+        // Determine which logs to load based on the selected log type
+        const logTypeSelect = document.getElementById('log-type-select');
+        const selectedLogType = logTypeSelect ? logTypeSelect.value : 'agent';
+
+        if (selectedLogType === 'ollama') {
+            const sessionSelect = document.getElementById('log-session-select');
+            const selectedSession = sessionSelect ? sessionSelect.value : '';
+            loadOllamaLogs(selectedSession);
+        } else {
+            const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
+            updateLogs(selectedAgent);
+        }
     } else if (tabName === 'knowledge') {
         loadKnowledgeBase();
+    } else if (tabName === 'chat') {
+        loadChatModels();
     }
 }
 
@@ -1379,9 +1417,58 @@ function escapeHtml(text) {
 
 let chatSessionId = null;
 let chatThinkingMode = false;
+let chatSelectedModel = null; // Current selected model
 let chatActiveStream = null;   // AbortController for the in-flight stream
 let _streamThinkingAccum = ''; // per-message thinking accumulator
 let _streamContentAccum  = ''; // per-message content accumulator
+let _chatModelsLoaded = false; // Track if models have been loaded
+
+async function loadChatModels() {
+    if (_chatModelsLoaded) return;
+    try {
+        const resp = await fetch('/api/models');
+        const data = await resp.json();
+        const models = data.models || [];
+
+        const select = document.getElementById('chat-model-select');
+        if (!select || models.length === 0) return;
+
+        // Populate dropdown
+        select.innerHTML = '';
+        models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.name;
+            option.textContent = model.label;
+            option.dataset.isDefault = model.is_default;
+            select.appendChild(option);
+        });
+
+        // Restore from localStorage or use default
+        const savedModel = localStorage.getItem('chatSelectedModel');
+        if (savedModel && select.querySelector(`option[value="${savedModel}"]`)) {
+            select.value = savedModel;
+            chatSelectedModel = savedModel;
+        } else {
+            const defaultModel = models.find(m => m.is_default);
+            if (defaultModel) {
+                select.value = defaultModel.name;
+                chatSelectedModel = defaultModel.name;
+            }
+        }
+
+        // Attach change handler
+        select.addEventListener('change', handleModelChange);
+        _chatModelsLoaded = true;
+    } catch (err) {
+        console.error('Failed to load chat models:', err);
+    }
+}
+
+function handleModelChange(event) {
+    chatSelectedModel = event.target.value;
+    localStorage.setItem('chatSelectedModel', chatSelectedModel);
+    console.log('Selected model:', chatSelectedModel);
+}
 
 function toggleThinkingMode() {
     chatThinkingMode = !chatThinkingMode;
@@ -1453,15 +1540,20 @@ function sendChatMessage() {
     // Create the assistant bubble structure upfront
     const { toolsEl, thinkingEl, contentEl } = createStreamingBubble();
 
+    const requestBody = {
+        message,
+        session_id: chatSessionId,
+        timestamp: isoTs,
+        thinking_mode: chatThinkingMode,
+    };
+    if (chatSelectedModel) {
+        requestBody.model = chatSelectedModel;
+    }
+
     fetch('/api/chat/stream', withAuth({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            message,
-            session_id: chatSessionId,
-            timestamp: isoTs,
-            thinking_mode: chatThinkingMode,
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
     }))
     .then(resp => {
@@ -1734,4 +1826,251 @@ function clearChatHistory() {
     .catch(err => {
         showNotification(`Error: ${err.message}`, 'error');
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ollama API Logging
+// ─────────────────────────────────────────────────────────────────────────────
+
+let currentLogType = 'agent';
+let loadedSessionIds = new Set();
+
+function switchLogType(type) {
+    currentLogType = type;
+    const agentSelect = document.getElementById('log-agent-select');
+    const sessionSelect = document.getElementById('log-session-select');
+
+    if (type === 'agent') {
+        agentSelect.style.display = 'inline-block';
+        sessionSelect.style.display = 'none';
+        loadAgentLogs(agentSelect.value);
+    } else if (type === 'ollama') {
+        agentSelect.style.display = 'none';
+        sessionSelect.style.display = 'inline-block';
+        loadOllamaLogs(sessionSelect.value);
+    }
+}
+
+async function loadAgentLogs(agent) {
+    currentLogType = 'agent';
+    await updateLogs(agent);
+}
+
+async function loadOllamaLogs(sessionId) {
+    try {
+        const url = sessionId ? `/api/ollama/logs/${sessionId}?limit=100` : '/api/ollama/logs?limit=100';
+        const response = await fetch(url);
+        const data = await response.json();
+
+        const container = document.getElementById('logs-list');
+        const scroller = container.parentElement;
+
+        if (!data.logs || data.logs.length === 0) {
+            const emptyHtml = '<p class="no-data">No Ollama API logs available</p>';
+            if (container.innerHTML !== emptyHtml) container.innerHTML = emptyHtml;
+            _lastLogsHtml = '';
+            return;
+        }
+
+        // Collect unique session IDs for the dropdown
+        const sessionIds = new Set();
+        data.logs.forEach(log => {
+            if (log.session_id && log.session_id !== 'unknown') {
+                sessionIds.add(log.session_id);
+            }
+        });
+
+        // Update session dropdown — only rebuild when the option set actually
+        // changed, so polling doesn't reset/close the dropdown every 2s.
+        const sessionSelect = document.getElementById('log-session-select');
+        const currentValue = sessionSelect.value;
+        const sortedIds = Array.from(sessionIds).sort().reverse();
+        const optionsKey = sortedIds.join('|');
+        if (sessionSelect.dataset.optionsKey !== optionsKey) {
+            const newOptions = ['<option value="">All Sessions</option>'];
+            sortedIds.forEach(sid => {
+                newOptions.push(`<option value="${sid}" ${currentValue === sid ? 'selected' : ''}>${sid.substring(0, 8)}...</option>`);
+            });
+            sessionSelect.innerHTML = newOptions.join('');
+            sessionSelect.dataset.optionsKey = optionsKey;
+            // Restore the selection in case the rebuild dropped it
+            sessionSelect.value = currentValue;
+        }
+
+        // Group each request with its responses + stream chunks, newest group first.
+        const html = renderOllamaLogGroups(data.logs);
+        const kindKey = 'ollama:' + (sessionId || '');
+        const kindChanged = container.dataset.logKind !== kindKey;
+
+        // Unchanged content for the same view — leave the DOM (and scroll) alone.
+        if (html === _lastLogsHtml && !kindChanged) return;
+
+        const prevTop = scroller.scrollTop;
+        const prevHeight = scroller.scrollHeight;
+        container.innerHTML = html;
+        container.dataset.logKind = kindKey;
+        _lastLogsHtml = html;
+
+        // Reset to top only when the view changed (session filter / tab open).
+        // On a routine poll refresh, preserve the user's view: new entries are
+        // prepended at the top, so add the height gained above to scrollTop to
+        // keep the same entries in place instead of letting them shift down.
+        scroller.scrollTop = kindChanged
+            ? 0
+            : prevTop + (scroller.scrollHeight - prevHeight);
+    } catch (error) {
+        console.error('Error loading Ollama logs:', error);
+        const container = document.getElementById('logs-list');
+        container.innerHTML = '<p class="no-data">Error loading Ollama logs: ' + error.message + '</p>';
+    }
+}
+
+// Group a flat, chronological log list into per-request groups. Each `request`
+// starts a new group; subsequent `response` / `stream_chunk` / `error` entries
+// attach to it. Groups are rendered newest-first (within-group order preserved).
+function renderOllamaLogGroups(logs) {
+    const groups = [];
+    let current = null;
+    for (const entry of logs) {
+        if (entry.direction === 'request' || !current) {
+            current = { request: null, items: [] };
+            groups.push(current);
+        }
+        if (entry.direction === 'request') {
+            current.request = entry;
+        } else {
+            current.items.push(entry);
+        }
+    }
+    return groups.reverse().map(renderOllamaGroup).join('');
+}
+
+function renderOllamaGroup(group) {
+    const req = group.request;
+    const anchor = req || group.items[0] || null;
+    const ts = anchor ? new Date(anchor.timestamp).toLocaleTimeString() : '';
+    const sid = (anchor && anchor.session_id) ? anchor.session_id : 'unknown';
+    const sessionShort = (sid && sid !== 'unknown') ? sid.substring(0, 8) + '…' : 'unknown';
+    const model = (req && req.payload && req.payload.model) ? req.payload.model : '';
+
+    const responses = group.items.filter(i => i.direction === 'response');
+    const streams = group.items.filter(i => i.direction === 'stream_chunk');
+    const errors = group.items.filter(i => i.direction === 'error');
+
+    let inner = '';
+
+    if (req) {
+        inner += ollamaCollapsible('ollama-request', 'request', model, _ollamaJsonPre(req.payload), false);
+    }
+
+    responses.forEach(r => {
+        inner += ollamaCollapsible('ollama-response', 'response', _ollamaResponseSnippet(r.payload), _ollamaJsonPre(r.payload), false);
+    });
+
+    if (streams.length) {
+        const recon = _ollamaReconstructStream(streams);
+        let body = `<div class="ollama-stream-text">${escapeHtml(recon.content || '(no content)')}</div>`;
+        if (recon.thinking) {
+            body += `<details class="ollama-substream"><summary>thinking</summary>` +
+                    `<div class="ollama-stream-text">${escapeHtml(recon.thinking)}</div></details>`;
+        }
+        const sub = `${streams.length} chunk${streams.length !== 1 ? 's' : ''}`;
+        inner += ollamaCollapsible('ollama-stream', 'stream', sub, body, false);
+    }
+
+    errors.forEach(e => {
+        inner += ollamaCollapsible('ollama-error', 'error', '', _ollamaJsonPre(e.payload), true);
+    });
+
+    return `
+        <div class="ollama-log-group">
+            <div class="ollama-group-header">
+                <span class="ollama-timestamp">${ts}</span>
+                <span class="ollama-session">${escapeHtml(sessionShort)}</span>
+            </div>
+            <div class="ollama-group-body">${inner}</div>
+        </div>
+    `;
+}
+
+// One collapsible row: colored direction badge + optional sub-label in the
+// summary, full content revealed on expand. `open` controls default state.
+function ollamaCollapsible(kindClass, badge, sub, bodyHtml, open) {
+    const subHtml = sub ? `<span class="ollama-sub">${escapeHtml(String(sub))}</span>` : '';
+    return `<details class="ollama-item ${kindClass}"${open ? ' open' : ''}>
+                <summary>
+                    <span class="ollama-direction">${badge}</span>
+                    ${subHtml}
+                </summary>
+                <div class="ollama-item-body">${bodyHtml}</div>
+            </details>`;
+}
+
+function _ollamaJsonPre(payload) {
+    let s;
+    try { s = JSON.stringify(payload, null, 2); }
+    catch (e) { s = String(payload); }
+    return `<pre><code>${escapeHtml(s)}</code></pre>`;
+}
+
+// Concatenate streamed content/thinking across all chunks of a group.
+function _ollamaReconstructStream(streams) {
+    let content = '', thinking = '';
+    for (const s of streams) {
+        const p = s.payload || {};
+        if (typeof p.content === 'string') content += p.content;
+        if (typeof p.thinking === 'string') thinking += p.thinking;
+    }
+    return { content, thinking };
+}
+
+// Short one-line preview for a response summary.
+function _ollamaResponseSnippet(payload) {
+    if (!payload || typeof payload !== 'object') return '';
+    if (typeof payload.content === 'string' && payload.content.trim()) {
+        return payload.content.trim().slice(0, 60);
+    }
+    if (payload.type === 'tool_call' && payload.name) return 'tool: ' + payload.name;
+    if (payload.name) return 'tool: ' + payload.name;
+    return '';
+}
+
+async function clearLogs() {
+    // Read the dropdown directly — the `currentLogType` variable can drift out
+    // of sync (it's only set by the dropdown's onchange, not by tab switches),
+    // which previously made this button silently refuse to clear.
+    const logTypeSelect = document.getElementById('log-type-select');
+    const selectedLogType = logTypeSelect ? logTypeSelect.value : 'agent';
+
+    if (selectedLogType === 'agent') {
+        // Don't clear agent logs from this UI
+        showNotification('Switch to "Ollama API Logs" to clear them, or use Clear cache for agent logs', 'info');
+        return;
+    }
+
+    if (!confirm('Clear all Ollama API logs?')) return;
+
+    try {
+        const response = await fetch('/api/ollama/logs/clear', withAuth({
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        }));
+
+        if (!response.ok) {
+            throw new Error('Failed to clear logs');
+        }
+
+        // Reset the render cache so the now-empty state actually paints
+        // (loadOllamaLogs skips re-rendering when the markup is unchanged).
+        _lastLogsHtml = '';
+        const sessionSelect = document.getElementById('log-session-select');
+        if (sessionSelect) {
+            sessionSelect.dataset.optionsKey = '';
+            sessionSelect.value = '';
+        }
+        await loadOllamaLogs('');
+        showNotification('Ollama API logs cleared', 'success');
+    } catch (error) {
+        showNotification(`Error clearing logs: ${error.message}`, 'error');
+    }
 }

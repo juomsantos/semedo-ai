@@ -24,6 +24,12 @@ except Exception:
 from shared.ollama_client import OllamaClient, OllamaError
 from shared.rag_tool import rag_query
 from shared.web_search import web_search, web_fetch
+from ollama_api_logger import OllamaAPILogger
+
+# Initialize logger
+dashboard_dir = Path(__file__).resolve().parent
+logs_dir = project_root / "logs" / "dashboard"
+_api_logger = OllamaAPILogger(logs_dir)
 
 
 def call_chat_with_tools(
@@ -67,9 +73,18 @@ def call_chat_with_tools(
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
+    # Extract session_id from user message if available (format: [session_id] message)
+    session_id = None
+    try:
+        if user_message.startswith("[") and "]" in user_message:
+            session_id = user_message.split("]")[0][1:]
+    except Exception:
+        pass
+
     for turn in range(max_tool_turns):
         # Call LLM with tools available
         try:
+            _api_logger.log_request(model, messages, tools, options, session_id)
             response = client.chat_with_tools(
                 model=model,
                 messages=messages,
@@ -77,7 +92,9 @@ def call_chat_with_tools(
                 options=options,
                 think=think,
             )
-        except OllamaError:
+            _api_logger.log_response(response, session_id)
+        except OllamaError as e:
+            _api_logger.log_error(str(e), {"turn": turn}, session_id)
             raise
 
         # Check response type
@@ -132,6 +149,7 @@ def call_chat_with_tools(
 
     # Max turns exceeded — force a text response by removing tools
     try:
+        _api_logger.log_request(model, messages, [], options, session_id)
         response = client.chat_with_tools(
             model=model,
             messages=messages,
@@ -139,9 +157,11 @@ def call_chat_with_tools(
             options=options,
             think=think,
         )
+        _api_logger.log_response(response, session_id)
         if response.get("type") == "text":
             return response.get("content", "").strip() or "No response generated."
-    except OllamaError:
+    except OllamaError as e:
+        _api_logger.log_error(str(e), {"context": "max_turns_exceeded"}, session_id)
         pass
 
     return "Tool limit exceeded. Please try a simpler request."
@@ -157,12 +177,13 @@ def stream_chat_with_tools(
     think: Optional[bool] = None,
 ) -> Generator:
     """
-    Streaming version of call_chat_with_tools.
+    Single-pass streaming chat with tool calling.
 
-    Phase 1 runs the tool-calling loop non-streaming (tools execute fast and
-    the LLM response is tiny) yielding a ``tool_call`` event per dispatch.
-    Phase 2 streams the final LLM response, yielding ``thinking`` / ``token``
-    chunks, then a single ``done`` event with the complete assembled text.
+    Drives the whole conversation through ``OllamaClient.stream_with_tools`` —
+    one streaming LLM call per turn. A turn streams ``thinking`` / ``token``
+    events live; if the model emits tool calls, they are dispatched and the loop
+    streams the next turn. The first turn that produces no tool calls *is* the
+    final answer (no separate non-streaming probe call, no discarded generation).
 
     Yields dicts — one of:
       {"type": "tool_call", "name": str,  "args": dict}    — tool dispatched
@@ -180,30 +201,68 @@ def stream_chat_with_tools(
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    # ── Phase 1: non-streaming tool loop ──────────────────────────────────
-    for _turn in range(max_tool_turns):
+    # Extract session_id from user message if available
+    session_id = None
+    try:
+        if user_message.startswith("[") and "]" in user_message:
+            session_id = user_message.split("]")[0][1:]
+    except Exception:
+        pass
+
+    full_content = ""
+
+    for turn in range(max_tool_turns):
+        # On every turn but a forced final one, tools stay enabled.
+        turn_content = ""
+        turn_tool_calls: List[Dict] = []
+
         try:
-            response = client.chat_with_tools(
+            _api_logger.log_request(model, messages, tools, options, session_id)
+            for chunk in client.stream_with_tools(
                 model=model,
                 messages=messages,
                 tools=tools,
                 options=options,
                 think=think,
-            )
+            ):
+                _api_logger.log_stream_chunk(chunk, session_id)
+                if chunk["thinking"]:
+                    yield {"type": "thinking", "text": chunk["thinking"]}
+                if chunk["content"]:
+                    turn_content += chunk["content"]
+                    yield {"type": "token", "text": chunk["content"]}
+                if chunk["tool_calls"]:
+                    turn_tool_calls.extend(chunk["tool_calls"])
+                if chunk["done"]:
+                    break
         except OllamaError as e:
+            _api_logger.log_error(str(e), {"turn": turn}, session_id)
             yield {"type": "error", "message": str(e)}
             return
 
-        if response.get("type") == "text":
-            # LLM is done with tools — break to Phase 2 streaming call.
-            # We intentionally discard this text response and re-call the
-            # LLM via stream_response so the user sees tokens as they arrive.
-            break
+        # No tool calls → this streamed text is the final answer.
+        if not turn_tool_calls:
+            full_content += turn_content
+            yield {"type": "done", "full_content": full_content}
+            return
 
-        if response.get("type") == "tool_call":
-            raw_message = response.get("raw_message")
-            tool_name = response.get("name", "unknown")
-            tool_input = response.get("arguments", {}) or {}
+        # Otherwise dispatch the tools and loop for the next turn. The content
+        # streamed during a tool turn (usually empty) is intermediate narration,
+        # so it is not folded into the final answer.
+        messages.append({
+            "role": "assistant",
+            "content": turn_content,
+            "tool_calls": [
+                {"function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                for tc in turn_tool_calls
+            ],
+        })
+
+        for tc in turn_tool_calls:
+            tool_name = tc.get("name", "unknown")
+            tool_input = tc.get("arguments", {}) or {}
+
+            yield {"type": "tool_call", "name": tool_name, "args": tool_input}
 
             try:
                 if tool_name == "rag_query":
@@ -217,35 +276,23 @@ def stream_chat_with_tools(
             except Exception as e:
                 tool_result = f"Tool error: {str(e)}"
 
-            yield {"type": "tool_call", "name": tool_name, "args": tool_input}
-
-            if raw_message is not None:
-                messages.append(raw_message)
-            else:
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{"function": {"name": tool_name, "arguments": tool_input}}],
-                })
             messages.append({
                 "role": "tool",
                 "content": tool_result,
                 "tool_name": tool_name,
             })
-            continue
 
-        # Unrecognized response shape — skip
-        continue
-
-    # ── Phase 2: stream the final response ────────────────────────────────
-    full_content = ""
+    # Tool-turn limit reached — force a final answer with tools disabled.
     try:
-        for chunk in client.stream_response(
+        _api_logger.log_request(model, messages, [], options, session_id)
+        for chunk in client.stream_with_tools(
             model=model,
             messages=messages,
+            tools=[],
             options=options,
             think=think,
         ):
+            _api_logger.log_stream_chunk(chunk, session_id)
             if chunk["thinking"]:
                 yield {"type": "thinking", "text": chunk["thinking"]}
             if chunk["content"]:
@@ -254,6 +301,7 @@ def stream_chat_with_tools(
             if chunk["done"]:
                 break
     except OllamaError as e:
+        _api_logger.log_error(str(e), {"context": "max_turns_exceeded"}, session_id)
         yield {"type": "error", "message": str(e)}
         return
 
