@@ -224,7 +224,7 @@ All settings are in `config.json` at the project root.
 | `scheduler.enable_timer_polling` | `false` | Enable timer-based polling alongside the file watcher |
 | `dashboard.port` | `5000` | Dashboard port |
 | `rag_api.url` | `http://localhost:8000` | RAG API address |
-| `chat.model` | `qwen3.5:9b` | Model used by the dashboard chat assistant |
+| `chat.models` | array (default `gemma-4-12B`) | Selectable models for the dashboard chat assistant; each entry has its own `options_standard`/`options_thinking`. (Legacy single `chat.model` still accepted as a fallback.) |
 
 To use different models, change the `model` field for any agent and pull the model with `ollama pull <model-name>`.
 

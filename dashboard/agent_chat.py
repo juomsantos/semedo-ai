@@ -40,6 +40,7 @@ def call_chat_with_tools(
     max_tool_turns: int = 8,
     options: Optional[dict] = None,
     think: Optional[bool] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """
     Run the tool-calling loop. Manages session history internally (tool messages are ephemeral).
@@ -73,13 +74,11 @@ def call_chat_with_tools(
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    # Extract session_id from user message if available (format: [session_id] message)
-    session_id = None
-    try:
-        if user_message.startswith("[") and "]" in user_message:
-            session_id = user_message.split("]")[0][1:]
-    except Exception:
-        pass
+    # The caller passes the real chat session id; the dashboard's Ollama-API
+    # log view filters on it. (The legacy fallback of parsing it from a
+    # "[session_id] message" prefix is gone — the message is actually prefixed
+    # with a *timestamp*, so that parse keyed every log entry by timestamp and
+    # made true per-session filtering impossible.)
 
     for turn in range(max_tool_turns):
         # Call LLM with tools available
@@ -175,6 +174,7 @@ def stream_chat_with_tools(
     max_tool_turns: int = 8,
     options: Optional[dict] = None,
     think: Optional[bool] = None,
+    session_id: Optional[str] = None,
 ) -> Generator:
     """
     Single-pass streaming chat with tool calling.
@@ -201,13 +201,9 @@ def stream_chat_with_tools(
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    # Extract session_id from user message if available
-    session_id = None
-    try:
-        if user_message.startswith("[") and "]" in user_message:
-            session_id = user_message.split("]")[0][1:]
-    except Exception:
-        pass
+    # session_id is passed explicitly by the caller (the dashboard's real chat
+    # session id, which the Ollama-API log view filters on). Don't derive it
+    # from the message — that text is prefixed with a timestamp, not the id.
 
     full_content = ""
 

@@ -106,7 +106,7 @@ On submit, creates a `.task.md` file in `inbox/` and returns the task ID. The fi
 
 ### Chat Assistant Tab
 
-An embedded LLM chat interface powered by `qwen3.5:9b` with live pipeline awareness and tool access. Responses stream token-by-token to the browser via Server-Sent Events. It can answer status questions, look up task details, search the knowledge base and web, and create new tasks — all from a single chat window.
+An embedded LLM chat interface with live pipeline awareness and tool access. The model is **selectable** from the entries declared in `config.json → chat.models` (default `gemma-4-12B`; the available list is served by `GET /api/models`). Responses stream token-by-token to the browser via Server-Sent Events. It can answer status questions, look up task details, search the knowledge base and web, and create new tasks — all from a single chat window.
 
 **Capabilities:**
 - **Pipeline status** — "What's processing?", "How many tasks failed?", "What's in the inbox?"
@@ -148,31 +148,30 @@ When thinking mode is active and the model produces a reasoning trace, a collaps
 ```json
 {
   "chat": {
-    "model": "qwen3.5:9b",
     "timeout": 240,
     "max_history_turns": 20,
     "max_tool_turns": 8,
-    "options_standard": {
-      "temperature": 0.7,
-      "top_p": 0.8,
-      "top_k": 20,
-      "presence_penalty": 1.5,
-      "repeat_penalty": 1.0,
-      "num_ctx": 32768
-    },
-    "options_thinking": {
-      "temperature": 1.0,
-      "top_p": 0.95,
-      "top_k": 20,
-      "presence_penalty": 1.5,
-      "repeat_penalty": 1.0,
-      "num_ctx": 32768
-    }
+    "models": [
+      {
+        "name": "gemma-4-12B",
+        "label": "Gemma 4 (12B)",
+        "is_default": true,
+        "options_standard": { "temperature": 1.0, "top_p": 0.95, "top_k": 64, "num_ctx": 16384 },
+        "options_thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": 64, "num_ctx": 32768 }
+      },
+      {
+        "name": "qwen3.5:9b",
+        "label": "Qwen 3.5 (9B)",
+        "is_default": false,
+        "options_standard": { "temperature": 1.0, "top_p": 1.0, "top_k": 20, "presence_penalty": 2.0, "num_ctx": 16384 },
+        "options_thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5, "num_ctx": 32768 }
+      }
+    ]
   }
 }
 ```
 
-`options_standard` is used when the ⚡ Standard toggle is active; `options_thinking` is used when 🧠 Thinking is active. The `think` parameter sent to Ollama mirrors the toggle state. Both option sets fall back to hard-coded defaults if absent from `config.json`.
+`chat.models` is an array; each entry carries its own `options_standard` (used when the ⚡ Standard toggle is active) and `options_thinking` (used when 🧠 Thinking is active). The entry marked `is_default: true` is the initial selection; `GET /api/models` returns the full list for the model picker, and the request body's `model` field chooses which one to use per call. The `think` parameter sent to Ollama mirrors the toggle state. An unknown model name, or a missing option set, falls back to hard-coded defaults. The older single-model layout (`chat.model` plus top-level `chat.options_standard`/`options_thinking`) is still honored as a backward-compatibility fallback when `chat.models` is absent.
 
 ### Task Hierarchy View
 The History tab renders tasks in a parent/child tree. Parent tasks expand to show their subtasks (coder, research, QA, retry coders) in the order they were created. This makes it easy to trace the full lifecycle of a request — which subtasks were created, whether QA triggered a retry, and which iteration completed successfully.

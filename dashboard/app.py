@@ -664,6 +664,7 @@ def chat():
             max_tool_turns=CHAT_MAX_TOOL_TURNS,
             options=chat_options,
             think=thinking_mode,
+            session_id=session_id,
         )
     except OllamaError as e:
         return jsonify({"error": f"LLM error: {str(e)}"}), 503
@@ -784,6 +785,7 @@ def chat_stream():
             max_tool_turns=CHAT_MAX_TOOL_TURNS,
             options=chat_options,
             think=thinking_mode,
+            session_id=session_id,
         ):
             if event["type"] == "done":
                 full_content = event.get("full_content", "")

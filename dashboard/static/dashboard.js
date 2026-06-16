@@ -185,8 +185,7 @@ async function updateDashboard() {
             const logTypeSelect = document.getElementById('log-type-select');
             const selectedLogType = logTypeSelect ? logTypeSelect.value : 'agent';
             if (selectedLogType === 'ollama') {
-                const sessionSelect = document.getElementById('log-session-select');
-                await loadOllamaLogs(sessionSelect ? sessionSelect.value : '');
+                await loadOllamaLogs();
             } else {
                 const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
                 await updateLogs(selectedAgent);
@@ -1051,9 +1050,7 @@ function switchTab(tabName) {
         const selectedLogType = logTypeSelect ? logTypeSelect.value : 'agent';
 
         if (selectedLogType === 'ollama') {
-            const sessionSelect = document.getElementById('log-session-select');
-            const selectedSession = sessionSelect ? sessionSelect.value : '';
-            loadOllamaLogs(selectedSession);
+            loadOllamaLogs();
         } else {
             const selectedAgent = document.getElementById('log-agent-select').value || 'orchestrator';
             updateLogs(selectedAgent);
@@ -1833,21 +1830,17 @@ function clearChatHistory() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let currentLogType = 'agent';
-let loadedSessionIds = new Set();
 
 function switchLogType(type) {
     currentLogType = type;
     const agentSelect = document.getElementById('log-agent-select');
-    const sessionSelect = document.getElementById('log-session-select');
 
     if (type === 'agent') {
         agentSelect.style.display = 'inline-block';
-        sessionSelect.style.display = 'none';
         loadAgentLogs(agentSelect.value);
     } else if (type === 'ollama') {
         agentSelect.style.display = 'none';
-        sessionSelect.style.display = 'inline-block';
-        loadOllamaLogs(sessionSelect.value);
+        loadOllamaLogs();
     }
 }
 
@@ -1856,50 +1849,43 @@ async function loadAgentLogs(agent) {
     await updateLogs(agent);
 }
 
-async function loadOllamaLogs(sessionId) {
+// Ollama API logs are always scoped to the active chat session (`chatSessionId`,
+// set from the SSE `meta` event). No session picker and no entry cap — every
+// call from the current session is shown.
+async function loadOllamaLogs() {
+    const container = document.getElementById('logs-list');
+    const scroller = container.parentElement;
     try {
-        const url = sessionId ? `/api/ollama/logs/${sessionId}?limit=100` : '/api/ollama/logs?limit=100';
-        const response = await fetch(url);
-        const data = await response.json();
-
-        const container = document.getElementById('logs-list');
-        const scroller = container.parentElement;
-
-        if (!data.logs || data.logs.length === 0) {
-            const emptyHtml = '<p class="no-data">No Ollama API logs available</p>';
-            if (container.innerHTML !== emptyHtml) container.innerHTML = emptyHtml;
-            _lastLogsHtml = '';
+        // No chat session yet — nothing to scope to.
+        if (!chatSessionId) {
+            const msg = '<p class="no-data">No active chat session. Send a message in the Chat tab to see its Ollama API calls here.</p>';
+            const kindKey = 'ollama:none';
+            if (container.dataset.logKind !== kindKey || _lastLogsHtml !== msg) {
+                container.innerHTML = msg;
+                container.dataset.logKind = kindKey;
+                _lastLogsHtml = msg;
+            }
             return;
         }
 
-        // Collect unique session IDs for the dropdown
-        const sessionIds = new Set();
-        data.logs.forEach(log => {
-            if (log.session_id && log.session_id !== 'unknown') {
-                sessionIds.add(log.session_id);
-            }
-        });
+        // limit=0 → unlimited: show every call from this session.
+        const response = await fetch(`/api/ollama/logs/${chatSessionId}?limit=0`);
+        const data = await response.json();
 
-        // Update session dropdown — only rebuild when the option set actually
-        // changed, so polling doesn't reset/close the dropdown every 2s.
-        const sessionSelect = document.getElementById('log-session-select');
-        const currentValue = sessionSelect.value;
-        const sortedIds = Array.from(sessionIds).sort().reverse();
-        const optionsKey = sortedIds.join('|');
-        if (sessionSelect.dataset.optionsKey !== optionsKey) {
-            const newOptions = ['<option value="">All Sessions</option>'];
-            sortedIds.forEach(sid => {
-                newOptions.push(`<option value="${sid}" ${currentValue === sid ? 'selected' : ''}>${sid.substring(0, 8)}...</option>`);
-            });
-            sessionSelect.innerHTML = newOptions.join('');
-            sessionSelect.dataset.optionsKey = optionsKey;
-            // Restore the selection in case the rebuild dropped it
-            sessionSelect.value = currentValue;
+        const kindKey = 'ollama:' + chatSessionId;
+
+        if (!data.logs || data.logs.length === 0) {
+            const emptyHtml = '<p class="no-data">No Ollama API logs for this chat session yet</p>';
+            if (container.dataset.logKind !== kindKey || _lastLogsHtml !== emptyHtml) {
+                container.innerHTML = emptyHtml;
+                container.dataset.logKind = kindKey;
+                _lastLogsHtml = emptyHtml;
+            }
+            return;
         }
 
         // Group each request with its responses + stream chunks, newest group first.
         const html = renderOllamaLogGroups(data.logs);
-        const kindKey = 'ollama:' + (sessionId || '');
         const kindChanged = container.dataset.logKind !== kindKey;
 
         // Unchanged content for the same view — leave the DOM (and scroll) alone.
@@ -1911,16 +1897,15 @@ async function loadOllamaLogs(sessionId) {
         container.dataset.logKind = kindKey;
         _lastLogsHtml = html;
 
-        // Reset to top only when the view changed (session filter / tab open).
-        // On a routine poll refresh, preserve the user's view: new entries are
-        // prepended at the top, so add the height gained above to scrollTop to
-        // keep the same entries in place instead of letting them shift down.
+        // Reset to top only when the view changed (e.g. session changed / tab
+        // open). On a routine poll refresh, preserve the user's view: new
+        // entries are prepended at the top, so add the height gained above to
+        // scrollTop to keep the same entries in place.
         scroller.scrollTop = kindChanged
             ? 0
             : prevTop + (scroller.scrollHeight - prevHeight);
     } catch (error) {
         console.error('Error loading Ollama logs:', error);
-        const container = document.getElementById('logs-list');
         container.innerHTML = '<p class="no-data">Error loading Ollama logs: ' + error.message + '</p>';
     }
 }
@@ -2063,12 +2048,7 @@ async function clearLogs() {
         // Reset the render cache so the now-empty state actually paints
         // (loadOllamaLogs skips re-rendering when the markup is unchanged).
         _lastLogsHtml = '';
-        const sessionSelect = document.getElementById('log-session-select');
-        if (sessionSelect) {
-            sessionSelect.dataset.optionsKey = '';
-            sessionSelect.value = '';
-        }
-        await loadOllamaLogs('');
+        await loadOllamaLogs();
         showNotification('Ollama API logs cleared', 'success');
     } catch (error) {
         showNotification(`Error clearing logs: ${error.message}`, 'error');

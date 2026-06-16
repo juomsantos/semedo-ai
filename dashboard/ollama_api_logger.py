@@ -103,7 +103,16 @@ class OllamaAPILogger:
             return obj
 
     def read_logs(self, limit: int = 100, session_id: Optional[str] = None) -> list:
-        """Read recent log entries, optionally filtered by session."""
+        """Read recent log entries, optionally filtered by session.
+
+        ``limit`` counts logical request *groups* (one LLM call and all of its
+        chunk/response/error entries), not raw lines. A single streaming call
+        writes one line per chunk via ``log_stream_chunk`` — often hundreds —
+        so a raw line-count tail would let one response's chunks evict the
+        ``request`` line that started it and every earlier call from the
+        window, leaving the UI with orphaned chunks and no originating request.
+        Grouping first keeps each call intact.
+        """
         if not self.log_file.exists():
             return []
 
@@ -122,8 +131,20 @@ class OllamaAPILogger:
         except Exception:
             pass
 
-        # Return most recent entries up to limit
-        return entries[-limit:] if limit else entries
+        if not limit:
+            return entries
+
+        # Partition into groups: a "request" entry (or the very first entry)
+        # starts a new group; everything else attaches to the current one. This
+        # mirrors the dashboard's renderOllamaLogGroups grouping.
+        groups: list = []
+        for entry in entries:
+            if entry.get("direction") == "request" or not groups:
+                groups.append([])
+            groups[-1].append(entry)
+
+        kept = groups[-limit:]
+        return [entry for group in kept for entry in group]
 
     def clear_logs(self):
         """Remove all log entries. Returns True on success, False otherwise."""

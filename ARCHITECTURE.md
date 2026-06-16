@@ -549,9 +549,13 @@ All runtime settings live in `config.json` at the project root, loaded by `scrip
   "scheduler": { "enable_timer_polling": false },
   "dashboard": { "port": 5000, "debug": false, "poll_interval": 1500 },
   "chat": {
-    "model": "qwen3.5:9b", "timeout": 240, "max_history_turns": 20, "max_tool_turns": 8,
-    "options_standard": { "temperature": 0.7, "top_p": 0.8,  "top_k": 20, "presence_penalty": 1.5, "num_ctx": 32768 },
-    "options_thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5, "num_ctx": 32768 }
+    "timeout": 240, "max_history_turns": 20, "max_tool_turns": 8,
+    "models": [
+      { "name": "gemma-4-12B", "label": "Gemma 4 (12B)", "is_default": true,
+        "options_standard": { "temperature": 1.0, "top_p": 0.95, "top_k": 64, "num_ctx": 16384 },
+        "options_thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": 64, "num_ctx": 32768 } }
+      /* …additional selectable models… */
+    ]
   },
   "rag_api": { "url": "http://localhost:8000" }
 }
