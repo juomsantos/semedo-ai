@@ -1,10 +1,10 @@
 """
-agent_boilerplate.py — Shared boilerplate for worker agents (M6).
+agent_boilerplate.py — Shared boilerplate for worker agents.
 
 Before this existed, the four worker agents (coder, research, QA, claude-code)
 each re-implemented load-system-prompt, load-context-files, and token-logging.
-A change to any one (e.g. the ``safe_read_context`` rollout for C3) required
-edits across four files. This module owns the canonical implementation.
+A change to any one (e.g. the ``safe_read_context`` rollout) required edits
+across four files. This module owns the canonical implementation.
 
 Three exports:
 
@@ -78,7 +78,7 @@ def build_user_message(
 
       3. The (possibly RAG-prefixed) task body.
 
-    Validation context (M4) is NOT injected here. For coder/research/
+    Validation context is NOT injected here. For coder/research/
     claude-code, ``task_io.create_task_file`` already prepended the
     ``## Validation Context`` section to ``task["body"]`` at task-creation
     time, so it arrives "for free" in the body. QA is the outlier — it builds
@@ -139,7 +139,7 @@ def log_tokens_safe(
     *,
     fallback_completion: Optional[int] = None,
 ) -> None:
-    """Log token usage, gracefully handling the claude-code case (M7).
+    """Log token usage, gracefully handling the claude-code case.
 
     Two call patterns:
 
@@ -151,8 +151,8 @@ def log_tokens_safe(
          response string) and the word-count proxy via
          ``fallback_completion=len(response.split())``. The helper logs
          ``(0, fallback_completion)``. Documented in the dashboard's Agent
-         Stats tab as approximate (M7); replacing it with real Anthropic SDK
-         counts is tracked separately.
+         Stats tab as approximate; replacing it with real Anthropic SDK
+         counts is a known follow-up.
 
     Silently no-ops if neither pattern matches — e.g. when Ollama returned an
     empty response and ``last_token_counts`` was never populated. This matches

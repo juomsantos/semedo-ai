@@ -10,7 +10,10 @@ JSON parsers for the orchestrator's LLM responses.
 """
 
 import json
+import logging
 import re
+
+_module_log = logging.getLogger(__name__)
 
 
 def parse_routing_decision(response: str) -> tuple[list[dict], bool]:
@@ -40,6 +43,11 @@ def parse_routing_decision(response: str) -> tuple[list[dict], bool]:
     # Try to extract JSON from markdown code fences (```json ... ```)
     json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', response, re.DOTALL)
     json_str = json_match.group(1) if json_match else response.strip()
+
+    # Escape literal newlines/tabs inside string values before parsing — the
+    # decomposition LLM often embeds raw newlines in a description, which
+    # json.loads rejects as control characters. Mirrors parse_validation_decision.
+    json_str = _sanitize_json_literals(json_str)
 
     try:
         data = json.loads(json_str)
@@ -85,6 +93,12 @@ def parse_routing_decision(response: str) -> tuple[list[dict], bool]:
         non_research = [s for s in data if s.get("worker") != "research"]
         if non_research:
             redecompose_flag = False
+            bad_workers = sorted({s.get("worker") for s in non_research})
+            _module_log.warning(
+                "redecompose_after_research flag cleared: %d non-research subtask(s) "
+                "present (workers: %s) — dispatching normally instead.",
+                len(non_research), bad_workers,
+            )
 
     return data, redecompose_flag
 

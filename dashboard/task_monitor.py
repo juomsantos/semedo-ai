@@ -540,7 +540,7 @@ class TaskMonitor:
 
             # Update status in frontmatter (line-level replace preserves all
             # other fields exactly — the same approach mark_processing uses
-            # in task_io.py for the N2 regression).
+            # in task_io.py to avoid the frontmatter round-trip dropping fields).
             lines = frontmatter.split("\n")
             new_lines = []
             for line in lines:

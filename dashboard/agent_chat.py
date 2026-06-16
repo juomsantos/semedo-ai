@@ -46,7 +46,7 @@ def call_chat_with_tools(
     Run the tool-calling loop. Manages session history internally (tool messages are ephemeral).
 
     Args:
-        model: Ollama model name (e.g. "qwen3.5:9b")
+        model: Ollama model name (one of config.json → chat.models)
         system_prompt: System prompt for the LLM
         history: Prior user/assistant message pairs (no tool messages)
         user_message: The user's current message
@@ -210,6 +210,7 @@ def stream_chat_with_tools(
     for turn in range(max_tool_turns):
         # On every turn but a forced final one, tools stay enabled.
         turn_content = ""
+        turn_thinking = ""
         turn_tool_calls: List[Dict] = []
 
         try:
@@ -221,8 +222,10 @@ def stream_chat_with_tools(
                 options=options,
                 think=think,
             ):
-                _api_logger.log_stream_chunk(chunk, session_id)
+                # Accumulate this turn's chunks; one aggregated entry is logged
+                # after the stream completes (not one line per chunk).
                 if chunk["thinking"]:
+                    turn_thinking += chunk["thinking"]
                     yield {"type": "thinking", "text": chunk["thinking"]}
                 if chunk["content"]:
                     turn_content += chunk["content"]
@@ -231,6 +234,7 @@ def stream_chat_with_tools(
                     turn_tool_calls.extend(chunk["tool_calls"])
                 if chunk["done"]:
                     break
+            _api_logger.log_stream_response(turn_content, turn_thinking, turn_tool_calls, session_id)
         except OllamaError as e:
             _api_logger.log_error(str(e), {"turn": turn}, session_id)
             yield {"type": "error", "message": str(e)}
@@ -281,6 +285,8 @@ def stream_chat_with_tools(
     # Tool-turn limit reached — force a final answer with tools disabled.
     try:
         _api_logger.log_request(model, messages, [], options, session_id)
+        final_content = ""
+        final_thinking = ""
         for chunk in client.stream_with_tools(
             model=model,
             messages=messages,
@@ -288,14 +294,16 @@ def stream_chat_with_tools(
             options=options,
             think=think,
         ):
-            _api_logger.log_stream_chunk(chunk, session_id)
             if chunk["thinking"]:
+                final_thinking += chunk["thinking"]
                 yield {"type": "thinking", "text": chunk["thinking"]}
             if chunk["content"]:
                 full_content += chunk["content"]
+                final_content += chunk["content"]
                 yield {"type": "token", "text": chunk["content"]}
             if chunk["done"]:
                 break
+        _api_logger.log_stream_response(final_content, final_thinking, [], session_id)
     except OllamaError as e:
         _api_logger.log_error(str(e), {"context": "max_turns_exceeded"}, session_id)
         yield {"type": "error", "message": str(e)}

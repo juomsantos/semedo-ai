@@ -1,11 +1,14 @@
 """
-agent_research.py — Research/summarization worker agent (qwen3.5:9b).
+agent_research.py — Research/summarization worker agent.
 
-CRON: */2 * * * * /usr/bin/python3 /path/to/scripts/agent_research.py
+Invocation: run by scripts/scheduler.py — triggered immediately by the
+agents/research/inbox/ file watcher (and on the scheduler's periodic interval
+if timer polling is enabled; it is disabled by default). The model is read from
+config.json (agents.research.model).
 
 Responsibilities:
   1. Poll agents/research/inbox/ for pending .task.md files
-  2. Run an agentic tool loop: call qwen3.5:9b with web_search and web_fetch
+  2. Run an agentic tool loop: call the research model with web_search and web_fetch
      available as native tools; execute any calls the model requests, loop
      until final answer
   3. Write the result (summary, research, Q&A) to task's output_path

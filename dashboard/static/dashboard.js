@@ -1911,8 +1911,9 @@ async function loadOllamaLogs() {
 }
 
 // Group a flat, chronological log list into per-request groups. Each `request`
-// starts a new group; subsequent `response` / `stream_chunk` / `error` entries
-// attach to it. Groups are rendered newest-first (within-group order preserved).
+// starts a new group; subsequent `response` / `error` entries attach to it
+// (streamed turns are logged as a single aggregated `response`). Groups are
+// rendered newest-first (within-group order preserved).
 function renderOllamaLogGroups(logs) {
     const groups = [];
     let current = null;
@@ -1939,7 +1940,6 @@ function renderOllamaGroup(group) {
     const model = (req && req.payload && req.payload.model) ? req.payload.model : '';
 
     const responses = group.items.filter(i => i.direction === 'response');
-    const streams = group.items.filter(i => i.direction === 'stream_chunk');
     const errors = group.items.filter(i => i.direction === 'error');
 
     let inner = '';
@@ -1951,17 +1951,6 @@ function renderOllamaGroup(group) {
     responses.forEach(r => {
         inner += ollamaCollapsible('ollama-response', 'response', _ollamaResponseSnippet(r.payload), _ollamaJsonPre(r.payload), false);
     });
-
-    if (streams.length) {
-        const recon = _ollamaReconstructStream(streams);
-        let body = `<div class="ollama-stream-text">${escapeHtml(recon.content || '(no content)')}</div>`;
-        if (recon.thinking) {
-            body += `<details class="ollama-substream"><summary>thinking</summary>` +
-                    `<div class="ollama-stream-text">${escapeHtml(recon.thinking)}</div></details>`;
-        }
-        const sub = `${streams.length} chunk${streams.length !== 1 ? 's' : ''}`;
-        inner += ollamaCollapsible('ollama-stream', 'stream', sub, body, false);
-    }
 
     errors.forEach(e => {
         inner += ollamaCollapsible('ollama-error', 'error', '', _ollamaJsonPre(e.payload), true);
@@ -1996,17 +1985,6 @@ function _ollamaJsonPre(payload) {
     try { s = JSON.stringify(payload, null, 2); }
     catch (e) { s = String(payload); }
     return `<pre><code>${escapeHtml(s)}</code></pre>`;
-}
-
-// Concatenate streamed content/thinking across all chunks of a group.
-function _ollamaReconstructStream(streams) {
-    let content = '', thinking = '';
-    for (const s of streams) {
-        const p = s.payload || {};
-        if (typeof p.content === 'string') content += p.content;
-        if (typeof p.thinking === 'string') thinking += p.thinking;
-    }
-    return { content, thinking };
 }
 
 // Short one-line preview for a response summary.

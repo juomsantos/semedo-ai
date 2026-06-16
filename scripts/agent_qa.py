@@ -1,13 +1,16 @@
 """
-agent_qa.py — QA worker agent (qwen3.5:9b).
+agent_qa.py — QA worker agent.
 
-CRON: */2 * * * * /usr/bin/python3 /path/to/scripts/agent_qa.py
+Invocation: run by scripts/scheduler.py — triggered immediately by the
+agents/qa/inbox/ file watcher (and on the scheduler's periodic interval if
+timer polling is enabled; it is disabled by default). The model is read from
+config.json (agents.qa.model).
 
 Responsibilities:
   1. Poll agents/qa/inbox/ for pending .task.md files
   2. Extract Python code from the referenced result file
   3. Execute the code via subprocess with 30s timeout
-  4. Call qwen3.5:9b to review: original task + code + execution output
+  4. Call the QA model to review: original task + code + execution output
   5. Return verdict: PASS (move to outbox) or FAIL (retry or report)
   6. If FAIL and retry_count==0: create new coder task with QA feedback
   7. If FAIL and retry_count==1: write detailed failure report to failed/
@@ -193,10 +196,10 @@ def review_with_llm(
     validation_context: dict | None = None,
 ) -> dict:
     """
-    Call qwen3.5:9b to review code with optional web search.
+    Call the QA model (config.json → agents.qa.model) to review code with optional web search.
     full_result is the raw coder result file content — all files included.
 
-    ``validation_context`` (M4): when the orchestrator issued a follow-up
+    ``validation_context``: when the orchestrator issued a follow-up
     decision (redo/refine/additional_work) on the parent task and the coder
     chained the resulting QA subtask here, ``task_description`` came in via
     ``original_description`` and so does not carry the ``## Validation
@@ -240,7 +243,7 @@ def review_with_llm(
 {execution_section}
 Please review the latest code (and prior work context if provided) to determine if the submission correctly and completely solves the original task."""
 
-    # M4: inject the orchestrator's validation context (if any) at the very
+    # Inject the orchestrator's validation context (if any) at the very
     # top so the QA system prompt's "look for ## Validation Context first"
     # instruction has something to find. No-op when the task wasn't a
     # follow-up.
@@ -432,7 +435,7 @@ Please fix these issues and try again."""
         # Pass the QA task's context_files (coder's previous output + prior iterations)
         # so the retry coder can see exactly what it wrote and make targeted fixes.
         retry_context_files = task["meta"].get("context_files", [])
-        # Known gap (M4): the orchestrator's validation_context is intentionally
+        # Known gap: the orchestrator's validation_context is intentionally
         # NOT forwarded onto this retry coder task. The retry prompt above
         # already embeds the QA FAIL feedback in the description, so re-injecting
         # the orchestrator's earlier redo/refine reasoning would mix two
@@ -582,7 +585,7 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
 
     task_description = task["meta"].get("original_description") or task["body"]
     # Pass the full result_content to the LLM — it sees every file the coder produced.
-    # validation_context (M4) reaches QA via the coder→QA chain (agent_coder.py
+    # validation_context reaches QA via the coder→QA chain (agent_coder.py
     # forwards it on create_task_file) or directly when the orchestrator targets
     # QA in a follow-up. Either way it must be re-injected into user_message
     # because we feed `original_description` (intentionally VC-free) above.

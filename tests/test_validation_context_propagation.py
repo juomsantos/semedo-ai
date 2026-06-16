@@ -1,8 +1,8 @@
 """
-Tests for the M4 ``validation_context`` propagation fix.
+Tests for the ``validation_context`` propagation fix.
 
-What M4 is about
-----------------
+What this is about
+------------------
 The orchestrator stamps a ``validation_context`` dict (decision_type +
 reasoning) onto every follow-up subtask it creates after a redo / refine /
 additional_work decision. Workers are supposed to receive this as a
@@ -168,7 +168,7 @@ def test_create_task_file_body_unchanged_without_validation_context(fake_project
 
 
 # ---------------------------------------------------------------------------
-# 3. QA path — the actual M4 fix
+# 3. QA path — the actual validation_context fix
 # ---------------------------------------------------------------------------
 
 
@@ -193,18 +193,18 @@ def _capture_user_message(client_mock) -> str:
 def qa_review(monkeypatch):
     """Yields a thunk that calls ``agent_qa.review_with_llm`` against a
     fully-mocked client and returns the user_message that would have been
-    sent to the LLM. Used by the M4 fix tests below.
+    sent to the LLM. Used by the validation_context fix tests below.
 
     The thunk takes one keyword arg, ``validation_context``, mirroring the
     real call-site at ``agent_qa.process_task`` (line ~566)."""
     import agent_qa
 
-    # Don't touch logs/qa/tokens.jsonl during tests. After M6, agent_qa imports
+    # Don't touch logs/qa/tokens.jsonl during tests. agent_qa imports
     # ``log_tokens_safe`` from ``shared.agent_boilerplate`` instead of the raw
     # ``log_tokens``.
     monkeypatch.setattr(agent_qa, "log_tokens_safe", lambda *a, **kw: None)
-    # Stub the system prompt loader so it doesn't read a real file. M6 added
-    # an ``agent_name`` argument, so the stub must accept it.
+    # Stub the system prompt loader so it doesn't read a real file. The shared
+    # loader takes an ``agent_name`` argument, so the stub must accept it.
     monkeypatch.setattr(agent_qa, "load_system_prompt", lambda *a, **kw: "QA SYSTEM PROMPT")
 
     client = MagicMock()
@@ -230,7 +230,7 @@ def qa_review(monkeypatch):
 
 
 def test_qa_user_message_contains_validation_context_when_present(qa_review):
-    """The whole point of M4: when the orchestrator decides ``redo`` and the
+    """The whole point: when the orchestrator decides ``redo`` and the
     follow-up runs through coder→QA, QA's LLM must see the section. Before
     the fix, ``task_description`` came from ``original_description`` (clean,
     no VC) and the section was lost. After the fix, the helper re-injects
@@ -263,7 +263,7 @@ def test_qa_user_message_has_no_vc_block_when_validation_context_is_empty(qa_rev
 
 
 def test_qa_injects_vc_even_when_original_description_was_clean(qa_review):
-    """The exact scenario M4 fixes. In the wild this looks like:
+    """The exact scenario this fixes. In the wild this looks like:
       - orchestrator decides REDO on a coder subtask
       - orchestrator creates coder follow-up with original_description = clean
         description (so the coder→QA chain doesn't double-inject)

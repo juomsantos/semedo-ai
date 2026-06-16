@@ -104,9 +104,10 @@ def _json_error_envelope(view):
     requests.ConnectionError → 503 (upstream dependency down, e.g. RAG API).
     Everything else → 500.
 
-    All branches preserve ``str(e)`` in the response body. See N7 in
-    REMAINING_ISSUES.md — the redaction step (UUID + server-side logging)
-    is intentionally deferred; for now the priority is fixing the codes.
+    All branches preserve ``str(e)`` in the response body. A redaction step
+    (return a UUID to the client + log the full error server-side) is a known
+    follow-up that is intentionally deferred; for now the priority is returning
+    the correct status codes.
     """
 
     @wraps(view)
@@ -402,8 +403,8 @@ def submit_task():
     context_files = [cf.strip() for cf in context_files if isinstance(cf, str) and cf.strip()]
 
     # Create task file. If create_task_file raises ValueError (e.g. a
-    # path-traversal attempt in context_files — see C3 hardening), the
-    # envelope decorator converts it to a 400 response.
+    # path-traversal attempt in context_files — see safe_read_context
+    # hardening in task_io.py), the envelope decorator converts it to a 400.
     inbox_path = PROJECT_ROOT / "inbox"
     task_path = create_task_file(
         inbox_path=inbox_path,

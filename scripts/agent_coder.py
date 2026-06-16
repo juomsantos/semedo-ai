@@ -1,11 +1,14 @@
 """
-agent_coder.py — Coder worker agent (qwen2.5-coder:7b).
+agent_coder.py — Coder worker agent.
 
-CRON: */2 * * * * /usr/bin/python3 /path/to/scripts/agent_coder.py
+Invocation: run by scripts/scheduler.py — triggered immediately by the
+agents/coder/inbox/ file watcher (and on the scheduler's periodic interval if
+timer polling is enabled; it is disabled by default). The model is read from
+config.json (agents.coder.model).
 
 Responsibilities:
   1. Poll agents/coder/inbox/ for pending .task.md files
-  2. Call qwen2.5-coder:7b with the task + system prompt
+  2. Call the coder model with the task + system prompt
   3. Write the generated code to the task's output_path
   4. Move task to outbox/ on success, failed/ on error
 """
@@ -29,6 +32,10 @@ from shared.ollama_client import OllamaClient, OllamaError
 from shared.agent_boilerplate import build_user_message, load_system_prompt, log_tokens_safe
 from shared.logger import AgentLogger
 from shared.config import load_config
+# Read-only queue lookup used to make QA chaining idempotent (no duplicate QA
+# task if this coder task is re-run by crash recovery). qa_chain imports only
+# shared.* so there is no circular import.
+from orchestration.qa_chain import _find_qa_for_output
 
 AGENT_NAME = "coder"
 _config = load_config()
@@ -83,21 +90,45 @@ def process_task(task: dict, client: OllamaClient, log: AgentLogger):
         prev_context = [cf for cf in task["meta"].get("context_files", []) if cf != output_path]
         qa_context_files = [output_path] + prev_context
 
-        create_task_file(
-            inbox_path=PROJECT_ROOT / "agents" / "qa" / "inbox",
-            task_type="qa",
-            description=task["meta"].get("original_description") or task["body"],
-            expected_output="QA verdict: PASS or FAIL with feedback",
-            assigned_to="qa",
-            created_by=AGENT_NAME,
-            chain_to=None,
-            retry_count=task["meta"].get("retry_count", 0),
-            original_description=task["meta"].get("original_description") or task["body"],
-            context_files=qa_context_files,
-            validation_context=qa_validation_context,
-            parent_task_id=task["meta"].get("parent_task_id"),
-        )
-        log.info(f"Chained to QA agent with {len(qa_context_files)} context file(s)")
+        # Idempotency guard: if a QA task already references this output (e.g. this
+        # coder task crashed after creating QA but before advancing, and crash
+        # recovery re-ran it), reuse it instead of creating a duplicate. output_path
+        # carries this task's unique id, so this only ever matches THIS task's own QA.
+        existing_status, existing_qa = _find_qa_for_output(output_path)
+        if existing_qa is not None:
+            qa_task_path = Path(existing_qa["path"])
+            log.info(
+                f"QA task already exists for {Path(output_path).name} "
+                f"({qa_task_path.name}, status={existing_status}) — not creating a duplicate"
+            )
+        else:
+            qa_task_path = create_task_file(
+                inbox_path=PROJECT_ROOT / "agents" / "qa" / "inbox",
+                task_type="qa",
+                description=task["meta"].get("original_description") or task["body"],
+                expected_output="QA verdict: PASS or FAIL with feedback",
+                assigned_to="qa",
+                created_by=AGENT_NAME,
+                chain_to=None,
+                retry_count=task["meta"].get("retry_count", 0),
+                original_description=task["meta"].get("original_description") or task["body"],
+                context_files=qa_context_files,
+                validation_context=qa_validation_context,
+                parent_task_id=task["meta"].get("parent_task_id"),
+            )
+            log.info(f"Chained to QA agent with {len(qa_context_files)} context file(s)")
+
+        # Verify-before-advance: a coder subtask must never reach validation/ without
+        # its QA task on disk, or the validation gate skips its parent forever. Atomic
+        # writes make create_task_file all-or-nothing, so this should always hold; if
+        # it somehow doesn't, leave the coder in processing/ so recover_processing_subtasks
+        # re-runs it (the idempotency guard above keeps the re-run from duplicating QA).
+        if not Path(qa_task_path).exists():
+            log.error(
+                f"QA task for {task_id} is not on disk after chaining — NOT advancing to "
+                f"validation/; leaving in processing/ for recovery to re-run."
+            )
+            return
 
     mark_awaiting_validation(task_path)
     log.info(f"Task {task_id} complete -> {output_path} (awaiting validation)")

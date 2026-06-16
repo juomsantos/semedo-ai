@@ -247,4 +247,9 @@ async def delete_document(doc_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Bind to loopback only — the RAG API has no auth and exposes destructive
+    # routes (DELETE /documents/{id}). Binding 0.0.0.0 would let anyone on the
+    # LAN wipe or poison the vector store. This mirrors how the scheduler starts
+    # it (uvicorn ... --host 127.0.0.1). If remote access is ever needed, front
+    # this with a reverse proxy + auth rather than widening the bind here.
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

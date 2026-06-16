@@ -16,6 +16,30 @@ from shared.validation_context import prepend_validation_context
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically.
+
+    Writes to a temp file in the same directory, then ``os.replace()`` — an
+    atomic rename on the same filesystem. A crash mid-write therefore leaves
+    either the old file or the complete new one, never a half-written
+    ``.task.md`` that ``frontmatter.load`` / ``read_task`` would choke on
+    (a torn task file is one way a QA task silently goes "missing", stalling
+    the validation gate). All task-file writes go through here.
+    """
+    path = Path(path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        # Don't leave a stray temp file behind on failure.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def get_folder(name: str) -> Path:
     return PROJECT_ROOT / name
 
@@ -88,9 +112,9 @@ def write_result(output_path, content, meta=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     if meta:
         post = frontmatter.Post(content, **meta)
-        path.write_text(frontmatter.dumps(post), encoding="utf-8")
+        _atomic_write_text(path, frontmatter.dumps(post))
     else:
-        path.write_text(content, encoding="utf-8")
+        _atomic_write_text(path, content)
     return path
 
 
@@ -108,7 +132,7 @@ def mark_processing(task_path):
     # Update status to "processing" so recover_orphaned_tasks doesn't re-dispatch it.
     # Use string-based replacement to preserve ALL original frontmatter fields.
     # Avoids python-frontmatter round-trip which can silently drop fields on
-    # Windows paths / datetime values (the N2 bug).
+    # Windows paths / datetime values (the frontmatter round-trip bug).
     content = new_path.read_text(encoding="utf-8")
     if content.startswith("---"):
         parts = content.split("---", 2)
@@ -117,7 +141,7 @@ def mark_processing(task_path):
             if "status:" not in new_fm:
                 new_fm = new_fm.rstrip("\n") + "\nstatus: processing\n"
             content = f"---{new_fm}---{parts[2]}"
-            new_path.write_text(content, encoding="utf-8")
+            _atomic_write_text(new_path, content)
     return new_path
 
 
@@ -132,7 +156,7 @@ def mark_awaiting_validation(task_path):
             if "status:" not in new_fm:
                 new_fm = new_fm.rstrip("\n") + "\nstatus: awaiting_validation\n"
             content = f"---{new_fm}---{parts[2]}"
-            new_path.write_text(content, encoding="utf-8")
+            _atomic_write_text(new_path, content)
     return new_path
 
 
@@ -216,7 +240,7 @@ def create_task_file(
     inbox = Path(inbox_path)
     inbox.mkdir(parents=True, exist_ok=True)
     task_path = inbox / f"{task_id}.task.md"
-    task_path.write_text(frontmatter.dumps(post), encoding="utf-8")
+    _atomic_write_text(task_path, frontmatter.dumps(post))
 
     return task_path
 
@@ -306,3 +330,4 @@ def resolve_task_dependencies(inboxes_dict: dict) -> None:
                 del task["meta"]["depends_on"]
                 body = task["body"]
                 write_result(str(task_path), body, meta=task["meta"])
+# All task-file writes route through _atomic_write_text (temp + os.replace).

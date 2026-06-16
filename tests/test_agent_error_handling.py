@@ -1,5 +1,5 @@
 """
-Tests that lock in the consistent error-handling patterns across agents (M3).
+Tests that lock in the consistent error-handling patterns across agents.
 
 These are *static* tests — they parse each agent's source with ``ast`` and
 verify the standardized patterns are present. They are intentionally NOT
@@ -9,7 +9,7 @@ behavioral tests, because:
   - The pre-flight check exits the process via ``sys.exit(1)``; pytest
     would need to fork to test it.
 
-What we lock in (the M3 standardization):
+What we lock in (the error-handling standardization):
 
   1. Every Ollama-using agent has a startup ``is_available()`` check that
      exits non-zero if the LLM server is unreachable. This is the
@@ -74,7 +74,7 @@ def test_ollama_agent_calls_is_available_in_main(agent_file):
     ]
     assert is_available_calls, (
         f"{agent_file}::main() must call client.is_available() before "
-        f"processing tasks. This is the M3 startup pre-flight pattern; "
+        f"processing tasks. This is the startup pre-flight pattern; "
         f"without it, an unreachable Ollama server only surfaces as confusing "
         f"per-task errors."
     )
@@ -105,7 +105,7 @@ def test_claude_code_agent_verifies_cli_in_main():
     src = (SCRIPTS_DIR / "agent_claude_code.py").read_text(encoding="utf-8")
     assert "claude" in src and "--version" in src, (
         "agent_claude_code.py should verify the claude CLI is available before "
-        "processing tasks (the M3 pre-flight pattern for non-Ollama agents)"
+        "processing tasks (the pre-flight pattern for non-Ollama agents)"
     )
     assert "sys.exit(1)" in src, (
         "agent_claude_code.py must sys.exit(1) when the claude CLI is missing"

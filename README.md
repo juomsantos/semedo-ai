@@ -67,7 +67,7 @@ For the full technical deep-dive — agent internals, task file schema, concurre
 |---|---|
 | **Python 3.10+** | |
 | **Ollama** | Running and reachable on your network; set the URL in `config.json` |
-| **Ollama models** | Pull the models you want to use (default: `qwen3.5:9b`, `qwen3-embedding:8b`) |
+| **Ollama models** | Pull the models you want to use: agents default to `qwen3.5:9b`, RAG embedding to `qwen3-embedding:8b`, and the dashboard chat to `gemma-4-12B` (see `config.json`) |
 | **Claude CLI** _(optional)_ | Only needed if you want to use the Claude Code agent |
 
 ---
@@ -95,8 +95,9 @@ cd ..
 
 **4. Pull the required Ollama models**
 ```bash
-ollama pull qwen3.5:9b
-ollama pull qwen3-embedding:8b
+ollama pull qwen3.5:9b          # agents (orchestrator, coder, research, qa)
+ollama pull qwen3-embedding:8b  # RAG embeddings
+ollama pull gemma-4-12B         # dashboard chat (default; or pull whichever chat.models you enable)
 ```
 
 **5. Configure the system**
@@ -142,6 +143,7 @@ python scripts/scheduler.py
 
 **Start the dashboard** (separate terminal, optional but recommended):
 ```bash
+pip install -r dashboard/requirements.txt   # first time only (Flask + shared deps)
 python dashboard/run_dashboard.py
 ```
 
@@ -258,10 +260,12 @@ ai-team/
 ## Testing
 
 The project has a pytest test suite covering the shared helpers, the
-orchestrator's pure helpers, the RAG tool, and the Ollama client wrapper.
-Tests run in under 2 seconds and never touch the real `inbox/`, `outbox/`,
-Ollama server, or RAG API — a `fake_project` fixture builds a temp project
-tree and the network is mocked.
+orchestrator's pure helpers and LLM-response parsers, the validation file-extraction
+safety helpers, the startup recovery passes, atomic task-file writes and the
+crash-safe coder→QA chain, the RAG tool, the RAG API (embedding fallback +
+chunker), the Ollama client wrapper, and the dashboard's auth guard. Tests run in a couple of seconds and never touch the real
+`inbox/`, `outbox/`, Ollama server, or RAG API — a `fake_project` fixture builds a
+temp project tree and the network is mocked.
 
 **Install test dependencies (one-time):**
 ```bash

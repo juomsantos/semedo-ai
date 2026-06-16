@@ -2,7 +2,7 @@
 Tests for ``scripts/shared/rag_injection.py``.
 
 The helper used to be byte-for-byte duplicated in ``agent_coder.py`` and
-``agent_orchestrator.py``. M2 consolidated it; these tests lock in the
+``agent_orchestrator.py``. It was later consolidated into one helper; these tests lock in the
 filter semantics (which prefixes get dropped, what gets prepended, what
 characters are sent to the RAG API) so any future change has to be
 deliberate.

@@ -11,6 +11,8 @@ re-point the orchestrator module's own captured copy of ``PROJECT_ROOT``.
 
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 
 import frontmatter
@@ -160,12 +162,24 @@ def test_find_qa_for_output_ignores_non_qa_tasks(orchestrator, fake_project):
 
 
 def test_find_qa_for_output_matches_by_basename_only(orchestrator, fake_project):
-    """QA's context_files may store absolute or relative paths — basename match."""
+    """QA's context_files may store absolute or relative paths — basename match.
+
+    The helper uses ``pathlib.Path(cf).name``, which only splits on the host
+    OS's separator (``\\`` on Windows, ``/`` on POSIX). To keep the test
+    meaningful on whichever platform CI runs, use an absolute path that uses
+    the host's own separator rather than hard-coding a Windows ``C:\\`` path
+    (which ``PurePosixPath`` would not split, failing on Linux).
+    """
     coder_out = "outbox/coder_relative_result.md"
+    abs_coder_output = (
+        r"C:\some\abs\path\coder_relative_result.md"
+        if os.name == "nt"
+        else "/some/abs/path/coder_relative_result.md"
+    )
     _write_qa_task(
         fake_project / "validation",
         qa_id="task_qa_005",
-        coder_output=r"C:\some\abs\path\coder_relative_result.md",
+        coder_output=abs_coder_output,
     )
 
     status, qa = orchestrator._find_qa_for_output(coder_out)
@@ -376,3 +390,4 @@ def test_load_system_prompt_reads_file(orchestrator, fake_project, monkeypatch):
     prompt_file.write_text("# Orchestrator\nHi.", encoding="utf-8")
     monkeypatch.setattr(orchestrator, "SYSTEM_PROMPT_PATH", prompt_file)
     assert "Orchestrator" in orchestrator.load_system_prompt()
+# (end of test module)

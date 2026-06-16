@@ -1,11 +1,11 @@
 """
 Tests for ``dashboard/task_monitor.py`` — focused on the frontmatter parser
-(M5 regression net) and end-to-end task detection via the fake project tree.
+(regression net) and end-to-end task detection via the fake project tree.
 
 The dashboard previously used a hand-rolled split-on-colon parser that
 silently dropped colons-in-values, couldn't read lists (context_files),
 and couldn't read nested dicts (validation_context). These tests lock in
-the post-M5 behavior so any future regression is caught immediately.
+the current yaml.safe_load behavior so any future regression is caught immediately.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def monitor(fake_project):
 
 
 # ---------------------------------------------------------------------------
-# _parse_yaml_frontmatter — the M5 unit
+# _parse_yaml_frontmatter — the frontmatter parser unit
 # ---------------------------------------------------------------------------
 
 
@@ -200,8 +200,8 @@ def test_get_pending_approval_tasks_returns_correct_metadata(monitor, fake_proje
 
 
 def test_get_pending_approval_tasks_handles_windows_paths(monitor, fake_project):
-    """The original M5 motivation: a Windows path in output_path used to
-    break yaml.safe_load (per stale CLAUDE.md note). It doesn't anymore."""
+    """The original motivation for the parser work: a Windows path in
+    output_path used to break the old parser. It doesn't anymore."""
     pending_dir = fake_project / "agents" / "claude-code" / "pending"
     _write_pending_approval_task(
         pending_dir,
@@ -244,7 +244,7 @@ def test_approve_task_moves_file_and_updates_status(monitor, fake_project):
 
 
 def test_approve_task_preserves_all_other_fields(monitor, fake_project):
-    """Regression for the N2-style bug: approve must not drop fields."""
+    """Regression for the frontmatter-field-drop bug: approve must not drop fields."""
     pending_dir = fake_project / "agents" / "claude-code" / "pending"
     inbox_dir = fake_project / "agents" / "claude-code" / "inbox"
     _write_pending_approval_task(

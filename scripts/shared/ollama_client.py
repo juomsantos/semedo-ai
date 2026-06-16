@@ -6,7 +6,7 @@ Usage:
 
     client = OllamaClient()
     response = client.chat(
-        model="qwen3:9b",
+        model="<model-name>",   # e.g. config.json → agents.<name>.model
         system_prompt="You are a helpful assistant.",
         user_message="Summarize this text: ...",
     )
@@ -17,7 +17,7 @@ Usage:
     # to auto-generate JSON schemas; no manual WEB_SEARCH_TOOL dict needed.
     from shared.web_search import web_search, web_fetch
     result = client.chat_with_tools(
-        model="qwen3:9b",
+        model="<model-name>",   # e.g. config.json → agents.<name>.model
         messages=[{"role": "user", "content": "What is the latest Python version?"}],
         tools=[web_search, web_fetch],
     )

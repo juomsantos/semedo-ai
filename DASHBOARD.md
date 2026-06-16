@@ -5,8 +5,10 @@ The Dashboard provides a real-time web UI for monitoring the AI Team multi-agent
 ## Quick Start
 
 ### Prerequisites
-- Flask: `pip install flask flask-cors`
-- (Flask is already in most Python environments, but install if needed)
+Install the dashboard dependencies (Flask, Flask-Cors, Werkzeug, plus the shared agent deps it imports):
+```bash
+pip install -r dashboard/requirements.txt
+```
 
 ### Run Dashboard
 

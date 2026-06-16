@@ -32,6 +32,10 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 
 **`mark_processing()` uses regex, not a frontmatter round-trip.** A round-trip via `python-frontmatter` drops fields silently. The regex replacement guarantees all original frontmatter fields survive (id, output_path, parent_task_id, etc.). Both `mark_processing()` and `mark_awaiting_validation()` pass `count=1` to `re.sub()` to avoid replacing multiple `status:` occurrences if a malformed frontmatter block contains duplicates.
 
+**All task-file writes are atomic.** `task_io._atomic_write_text(path, text)` writes a temp file in the same directory then `os.replace()`s it into place (an atomic rename on one filesystem). Every task-file writer routes through it — `write_result`, `create_task_file`, and the regex status patches in `mark_processing` / `mark_awaiting_validation`. A crash mid-write therefore leaves either the old file or the complete new one, never a half-written `.task.md` that `read_task` / `frontmatter.load` would skip (a torn QA task file reads as "missing" and would stall the validation gate). `move_task` is already an atomic rename, so the whole "write result → create QA → advance" sequence is crash-safe.
+
+**Coder→QA chaining is idempotent + verify-before-advance.** In `agent_coder.process_task`, before creating the QA task it calls `_find_qa_for_output(output_path)` (from `orchestration.qa_chain`); if a QA already references this output it reuses it instead of creating a duplicate (output_path carries the coder task's unique id, so this only matches the task's own QA — the case where a crash recovery re-runs a coder that already created its QA). It then only calls `mark_awaiting_validation` once the QA task file is confirmed on disk; otherwise it returns, leaving the coder in `processing/` for `recover_processing_subtasks` to re-run. This makes the invariant "a coder subtask in `validation/` always has a QA task" unbreakable by a crash, so the QA gate can never skip a parent forever.
+
 **Dashboard YAML parser** (`task_monitor.py::_parse_yaml_frontmatter`) uses `yaml.safe_load`. PyYAML handles unquoted Windows backslash paths correctly. Malformed YAML returns `{}`.
 
 **Dashboard auth:** state-changing endpoints are gated by an `X-Dashboard-Token` header. The token is generated at startup (or read from `$DASHBOARD_TOKEN`), injected into the served HTML as `<meta name="dashboard-token">`, and attached by `dashboard.js` to every POST/DELETE via `withAuth()`. After a dashboard restart, browser tabs need a refresh. Set `$DASHBOARD_TOKEN` for stability across restarts.
@@ -44,7 +48,7 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 
 **Dashboard chat models + thinking mode:** chat is **multi-model**. `config.json → chat.models` is an array of model objects (`name`, `label`, `is_default`, `options_standard`, `options_thinking`); `app.py` parses it into `CHAT_MODELS` and exposes them via `GET /api/models`, with the `is_default` entry as the initial selection (currently `gemma-4-12B`). The request body's `model` field picks which model to use per call; `_get_model_config(model_name)` returns that model's two option sets (falling back to `DEFAULT_CHAT_OPTIONS_*` for an unknown name). The old single-model `chat.model` / top-level `chat.options_standard/options_thinking` layout is still accepted as a backward-compatibility fallback when `chat.models` is absent. A toggle (⚡ Standard / 🧠 Thinking) sends `thinking_mode: true/false`; the backend selects the active model's `options_thinking` or `options_standard` and passes `think=thinking_mode` to Ollama. When thinking content arrives in stream chunks (`chunk.message.thinking`), `stream_with_tools()` yields it as `{"thinking": str, "content": "", "tool_calls": [], "done": false}`; the browser renders it in a collapsible `<details>` block.
 
-**Dashboard Ollama API logging:** `dashboard/ollama_api_logger.py` (`OllamaAPILogger`) appends every chat LLM request/response/stream-chunk/error to `logs/dashboard/ollama_api.jsonl` as one JSON line each, serialized through a module-level `_WRITE_LOCK` so the `app.py` and `agent_chat.py` instances never interleave. It uses open-append-close (no persistent handle) so `clear_logs()` can always truncate/remove the file on Windows. `read_logs(limit=N)` tails by **request group** (one LLM call + all its chunks), not raw lines, so a streaming call's hundreds of chunk lines can't evict the originating `request` line. Surfaced in the dashboard logs dropdown.
+**Dashboard Ollama API logging:** `dashboard/ollama_api_logger.py` (`OllamaAPILogger`) appends chat LLM `request`/`response`/`error` entries to `logs/dashboard/ollama_api.jsonl` as one JSON line each, serialized through a module-level `_WRITE_LOCK` so the `app.py` and `agent_chat.py` instances never interleave. It uses open-append-close (no persistent handle) so `clear_logs()` can always truncate/remove the file on Windows. **Streaming is logged as one aggregated entry per turn, not per chunk:** `agent_chat.stream_chat_with_tools` accumulates each turn's content/thinking/tool_calls and calls `log_stream_response(...)` once after the stream completes, which writes a single `response`-shaped entry (`{content, thinking, tool_calls, streamed: true}`). This keeps the file from ballooning (one line per turn instead of hundreds) and means neither `read_logs` nor the dashboard JS has to reassemble chunks — the dashboard renders it like any other response. `read_logs(limit=N)` tails by **request group** (request + its response/error), not raw lines, so a multi-entry call is never split across the tail boundary. Surfaced in the dashboard logs dropdown.
 
 **Validation loop mechanics:**
 - Workers move completed tasks to `validation/` via `mark_awaiting_validation()` — never directly to `outbox/`.
@@ -85,7 +89,7 @@ Multi-agent AI system using a shared filesystem as the message bus. Agents are t
 
 **Config:** `config.json` → `scripts/shared/config.py` (`ProjectConfig`). Key fields: `ollama.timeout` (360s per call), `agents.<name>.process_timeout` (scheduler kill ceiling — must exceed `timeout × max_tool_turns`), `agents.<name>.options` (passed verbatim to `ollama.Client.chat`), `agents.<name>.thinking` (null = library default), `scheduler.enable_timer_polling` (currently false), `rag_api.url`. The dashboard chat reads `chat.timeout`, `chat.max_tool_turns`, `chat.max_history_turns`, and the `chat.models` array (per-model `options_standard`/`options_thinking`); `app.py` consumes `chat.models` directly rather than through `ProjectConfig` accessors.
 
-**Dependencies:** pinned to `==<version>` in `requirements.txt` / `rag_api/requirements.txt`. Full transitive closure in `requirements.lock`. To upgrade: bump version, `pip install -r requirements.txt --upgrade`, then `python scripts/_gen_locks.py`, run tests, commit.
+**Dependencies:** pinned to `==<version>` in `requirements.txt` (agents/shared), `dashboard/requirements.txt` (Flask + Flask-Cors + Werkzeug; chains `-r ../requirements.txt`), and `rag_api/requirements.txt`. Full transitive closure in `requirements.lock`. To upgrade: bump version, `pip install -r requirements.txt --upgrade`, then `python scripts/_gen_locks.py`, run tests, commit.
 
 ---
 
@@ -116,6 +120,12 @@ AI Team/
     test_dashboard_token.py              ← X-Dashboard-Token guard on state-changing endpoints
     test_task_monitor.py                 ← YAML frontmatter parser, approve/reject flows
     test_validation_context_propagation.py ← prepend_validation_context, QA injection guard
+    test_parsing.py                      ← routing/validation JSON parsers + literal-char sanitizer
+    test_validate_helpers.py             ← file-extraction safety: _extract_named_files, _is_safe_output_path, _normalise_path
+    test_recovery.py                     ← all four startup recovery passes (orphan/stale/stall/validation sweep)
+    test_agent_error_paths.py            ← behavioral error paths: coder/research → failed/ on OllamaError; QA verdict mapping
+    test_coder_qa_chain.py               ← atomic writes; coder→QA chain idempotency + verify-before-advance
+    test_rag_api.py                      ← rag_api: embedding zero-vector fallback logging, embed/rerank, text chunker
   inbox/                   ← drop .task.md files here to submit work
   processing/              ← parent tasks held during validation loop (+ orchestrator.lock)
   validation/              ← completed subtasks awaiting orchestrator review
@@ -143,6 +153,7 @@ AI Team/
       pending/            ← awaiting manual approval
     qa/inbox/ + system_prompt.md
   dashboard/
+    requirements.txt      ← Flask/Flask-Cors/Werkzeug; chains -r ../requirements.txt
     app.py                ← Flask REST API + @_json_error_envelope on all endpoints
     run_dashboard.py      ← launcher
     task_monitor.py       ← filesystem scanner; yaml.safe_load for frontmatter
@@ -202,7 +213,8 @@ cd rag_api && pip install -r requirements.txt
 
 **Terminal 2 — Dashboard (optional):**
 ```bash
-python dashboard/run_dashboard.py   # http://localhost:5000
+pip install -r dashboard/requirements.txt   # first time only (Flask + shared deps)
+python dashboard/run_dashboard.py            # http://localhost:5000
 ```
 
 ---

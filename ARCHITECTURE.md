@@ -163,6 +163,14 @@ AI Team/
     test_orchestrator_helpers.py ← QA chain discovery and verdict extraction
     test_agent_boilerplate.py  ← M6 build_user_message parity matrix, load_system_prompt, log_tokens_safe
     test_task_monitor.py       ← dashboard's frontmatter parser + approve/reject flows
+    test_dashboard_token.py    ← X-Dashboard-Token guard on state-changing endpoints
+    test_validation_context_propagation.py ← prepend_validation_context, QA re-injection guard
+    test_parsing.py            ← routing/validation JSON parsers + literal-char sanitizer
+    test_validate_helpers.py   ← file-extraction safety helpers (path-traversal guard, named-file parse)
+    test_recovery.py           ← all four startup recovery passes
+    test_agent_error_paths.py  ← behavioral error paths (coder/research fail-routing, QA verdicts)
+    test_coder_qa_chain.py     ← atomic writes; coder→QA idempotency + verify-before-advance
+    test_rag_api.py            ← rag_api: embed zero-vector fallback logging, embed/rerank, chunker
   pytest.ini                   ← pytest config (testpaths, addopts, filterwarnings)
   requirements-dev.txt         ← pytest, pytest-cov
   scripts/
@@ -382,7 +390,7 @@ On `complete`, the orchestrator also scans every passing coder subtask's result 
 All code tasks automatically chain through QA:
 
 1. Orchestrator sets `chain_to: qa` on every code subtask.
-2. Coder completes → creates QA task in `agents/qa/inbox/` with the result file in `context_files`. The QA task inherits `parent_task_id` from the coder task.
+2. Coder completes → creates QA task in `agents/qa/inbox/` with the result file in `context_files`, then advances itself to `validation/`. The QA task inherits `parent_task_id` from the coder task. This step is **idempotent and verified**: the coder reuses an existing QA for the same output instead of creating a duplicate (safe if crash recovery re-runs it), and only advances to `validation/` once the QA task is confirmed on disk — otherwise it stays in `processing/` for recovery to re-run. The invariant "a coder subtask in `validation/` always has a QA task" therefore holds even across crashes, so the validation gate can never skip a parent indefinitely.
 3. QA extracts code → executes via subprocess (30s timeout) → reviews with qwen3.5:9b. May perform up to 3 `web_search` + 6 `web_fetch` + 5 `rag_query` calls to look up errors or verify library usage.
 4. **PASS** → writes approval to `outbox/`, moves task to `validation/`.
 5. **FAIL, retry_count=0** → creates new coder task with QA feedback, `retry_count=1`. Retry coder also inherits `parent_task_id`.
@@ -495,6 +503,10 @@ See `DASHBOARD.md` for full API docs and configuration options.
 ---
 
 ## Concurrency and Fault Tolerance
+
+### Atomic Task-File Writes
+
+Every `.task.md` and result file is written atomically via `task_io._atomic_write_text` (write a temp file in the same directory, then `os.replace()` — an atomic rename on one filesystem). All writers route through it: `write_result`, `create_task_file`, and the regex status patches in `mark_processing` / `mark_awaiting_validation`. A crash mid-write thus leaves either the old file or the complete new one — never a torn `.task.md`. This matters because `read_task` silently skips an unreadable file, so a half-written QA task would otherwise read as "missing" and stall the validation gate. Combined with `move_task` (already an atomic rename) and the idempotent, verify-before-advance coder→QA chain (see QA Loop), the "write result → create QA → advance to validation/" sequence is crash-safe end to end.
 
 ### Concurrency Guard
 
@@ -659,6 +671,14 @@ filterwarnings = ignore::DeprecationWarning:frontmatter
 | `test_orchestrator_helpers.py` | `agent_orchestrator.py` | `_find_qa_for_output` across in-flight + done dirs; `_find_retry_coder_output` timestamp guard and failed-sentinel; `_extract_qa_verdict` PASS/FAIL/UNKNOWN paths |
 | `test_agent_boilerplate.py` | `shared/agent_boilerplate.py` | `build_user_message` parity matrix for all three styles (coder/research/claude-code) — verifies byte-identical output to original per-agent inline code; `load_system_prompt` round-trip; `log_tokens_safe` with OllamaClient and word-count fallback paths |
 | `test_task_monitor.py` | `dashboard/task_monitor.py` | `_parse_yaml_frontmatter` correctness across Windows paths, lists, nested dicts, colons-in-values, comments; end-to-end `get_pending_approvals` / `approve_task` / `reject_task` with all frontmatter fields preserved |
+| `test_dashboard_token.py` | `dashboard/app.py` | `X-Dashboard-Token` guard — state-changing endpoints reject missing/wrong tokens and accept the correct one; read-only endpoints stay open; the token is embedded in served HTML |
+| `test_validation_context_propagation.py` | `shared/validation_context.py` + QA | `prepend_validation_context` block formatting per decision type; QA re-injects it from `original_description`; the coder→QA chain does not double-inject |
+| `test_parsing.py` | `orchestration/parsing.py` | `parse_routing_decision` (array, wrapper, bare-object, fence, invalid worker/fields, empty) and `parse_validation_decision` (valid decisions, fence, invalid/missing decision, non-object); `_sanitize_json_literals` escapes literal newlines/tabs without double-escaping |
+| `test_validate_helpers.py` | `orchestration/validate.py` | `_extract_named_files` (single/multi-file, language hints, no-header/no-code); `_is_safe_output_path` traversal guard (absolute, leading `/`/`\`, `..`); `_normalise_path` separator + `./` canonicalization |
+| `test_recovery.py` | `orchestration/recovery.py` | all four startup passes against `fake_project`: orphaned-pending → inbox, stale-processing → worker inbox, stall retry/parent-fail at cap, validation-sweep (parent-complete / no-parent-with-result) plus the keep cases |
+| `test_agent_error_paths.py` | `agent_coder.py` / `agent_research.py` / `agent_qa.py` | behavioral (not AST) error paths: coder & research move the task to `failed/` when the LLM call raises `OllamaError`; QA's `review_with_llm` maps `OllamaError` and an empty response to a `FAIL` verdict and parses explicit PASS / FAIL+feedback |
+| `test_coder_qa_chain.py` | `shared/task_io.py` + `agent_coder.py` | `_atomic_write_text` leaves no temp residue and overwrites cleanly; the coder→QA chain creates exactly one QA and advances to `validation/`, reuses an existing QA instead of duplicating (idempotent re-run), and stays in `processing/` when the QA task isn't on disk (verify-before-advance) |
+| `test_rag_api.py` | `rag_api/vector_store.py`, `ollama_client.py`, `ingestion.py` | `_embed_content` zero-vector fallback logs a WARNING on both the exception and empty-result paths and returns real vectors otherwise; `OllamaClient.embed` success/HTTP-error mapping and cosine `rerank` ordering; `TextChunker` overlap + `chunk_document` dict shaping. Stubs `chromadb` so it runs without the native dep |
 
 ### Fixtures (`tests/conftest.py`)
 

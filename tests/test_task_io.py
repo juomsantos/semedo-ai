@@ -4,7 +4,7 @@ Tests for ``scripts/shared/task_io.py``.
 Coverage focus:
   - frontmatter round-trip via ``read_task`` / ``write_result``
   - ``mark_processing`` / ``mark_awaiting_validation`` / ``mark_completed``
-    preserve all original frontmatter fields (the N2 bug regression)
+    preserve all original frontmatter fields (the frontmatter round-trip regression)
   - ``safe_read_context`` rejects path traversal, missing files, directories
   - ``create_task_file`` populates frontmatter + body correctly
   - ``resolve_task_dependencies`` wires completed deps into context_files
@@ -87,7 +87,7 @@ def test_write_result_without_meta_is_plain_text(fake_project):
 
 
 # ---------------------------------------------------------------------------
-# safe_read_context — the path-traversal defense (C3)
+# safe_read_context — the path-traversal defense
 # ---------------------------------------------------------------------------
 
 
@@ -148,7 +148,7 @@ def test_safe_read_context_silent_without_logger(fake_project):
 
 
 # ---------------------------------------------------------------------------
-# mark_processing — preserves all original frontmatter fields (the N2 bug)
+# mark_processing — preserves all original frontmatter fields (frontmatter round-trip bug)
 # ---------------------------------------------------------------------------
 
 

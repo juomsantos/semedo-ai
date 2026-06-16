@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DIRECT_ROOT = ["requests", "python-frontmatter", "PyYAML", "ollama", "watchdog"]
 DIRECT_RAG = ["fastapi", "uvicorn", "chromadb", "pydantic", "requests", "python-multipart"]
+# Dashboard adds Flask on top of the root deps (it imports scripts/shared/), so
+# its closure is computed over the root deps plus the Flask stack.
+DIRECT_DASHBOARD = DIRECT_ROOT + ["Flask", "Flask-Cors", "Werkzeug"]
 
 
 def closure(roots):
@@ -62,8 +65,10 @@ def write_lock(path: Path, deps: dict[str, str], roots: list[str]):
 def main():
     root_deps = closure(DIRECT_ROOT)
     rag_deps = closure(DIRECT_RAG)
+    dashboard_deps = closure(DIRECT_DASHBOARD)
     write_lock(ROOT / "requirements.lock", root_deps, DIRECT_ROOT)
     write_lock(ROOT / "rag_api" / "requirements.lock", rag_deps, DIRECT_RAG)
+    write_lock(ROOT / "dashboard" / "requirements.lock", dashboard_deps, DIRECT_DASHBOARD)
 
 
 if __name__ == "__main__":

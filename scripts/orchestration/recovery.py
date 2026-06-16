@@ -169,7 +169,7 @@ def recover_stalled_subtasks(log: AgentLogger):
 
             if not parent_path.exists():
                 # If parent is already in outbox (completed), this subtask is simply
-                # stale — not a stall.  Skip silently to avoid N10 log noise.
+                # stale — not a stall.  Skip silently to avoid log noise.
                 outbox_parent = _task_io.PROJECT_ROOT / "outbox" / f"{parent_task_id}.task.md"
                 if not outbox_parent.exists():
                     log.debug(f"Parent {parent_task_id} not found anywhere for failed subtask {subtask_file.name} — skipping")

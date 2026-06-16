@@ -1,7 +1,11 @@
 """
 agent_claude_code.py — Claude Code CLI worker agent.
 
-CRON: */3 * * * * /usr/bin/python3 /path/to/scripts/agent_claude_code.py
+Invocation: run by scripts/scheduler.py — triggered immediately by the
+agents/claude-code/inbox/ file watcher (and on the scheduler's periodic
+interval if timer polling is enabled; it is disabled by default). Tasks land
+in agents/claude-code/pending/ first and require manual approval before they
+move to the inbox.
 
 Responsibilities:
   1. Poll agents/claude-code/inbox/ for pending .task.md files
@@ -103,8 +107,8 @@ def process_task(task: dict, log: AgentLogger):
 
     write_result(output_path, response, meta={"task_id": task_id, "agent": AGENT_NAME})
     # Approximate completion-token count via word count — the Claude CLI does
-    # not report tokens. M7 in REMAINING_ISSUES.md tracks replacing this with
-    # real Anthropic SDK counts.
+    # not report tokens. Replacing this with real Anthropic SDK counts is a
+    # known follow-up.
     log_tokens_safe(AGENT_NAME, task_id, response, fallback_completion=len(response.split()))
     mark_awaiting_validation(task_path)
     log.info(f"Task {task_id} complete → {output_path} (awaiting validation)")

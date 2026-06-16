@@ -1,5 +1,5 @@
 """
-Tests for ``scripts/shared/agent_boilerplate.py`` (M6).
+Tests for ``scripts/shared/agent_boilerplate.py``.
 
 The four worker agents used to each re-implement load-system-prompt,
 load-context-files, and token-logging. The helper consolidates those patterns;
@@ -103,7 +103,7 @@ def test_build_user_message_coder_single_context_file_matches_old_inline_format(
     result = ab.build_user_message(task, style="coder", use_rag=False)
 
     # Byte-for-byte the same string the old inline code in agent_coder.py
-    # produced (lines 64-72 before M6).
+    # produced (before the boilerplate refactor).
     expected = "### foo.py\n```\nprint('hi')\n```\n\n---\n\nImplement Y."
     assert result == expected
 
@@ -176,7 +176,7 @@ def test_build_user_message_research_single_context_file(fake_project):
     result = ab.build_user_message(task, style="research", use_rag=False)
 
     # Byte-for-byte the same string the old inline code in agent_research.py
-    # produced (lines 188-197 before M6).
+    # produced (before the boilerplate refactor).
     expected = "### notes.md\n\nSome prose.\n\n---\n\nSummarise."
     assert result == expected
 
@@ -214,7 +214,7 @@ def test_build_user_message_claude_code_single_context_file(fake_project):
     result = ab.build_user_message(task, style="claude-code", use_rag=False)
 
     # Byte-for-byte the same string the old inline code in agent_claude_code.py
-    # produced (lines 87-96 before M6).
+    # produced (before the boilerplate refactor).
     expected = "### Context: thing.txt\n\ncontents\n\n---\n\nDo."
     assert result == expected
 
@@ -347,7 +347,7 @@ def test_log_tokens_safe_prefers_client_counts_over_fallback(fake_project):
 
 
 def _old_coder_inline(task, *, rag_result):
-    """Reproduce agent_coder.py:58-72 (pre-M6) exactly."""
+    """Reproduce agent_coder.py's old inline context rendering exactly."""
     from shared.task_io import safe_read_context
 
     user_message = rag_result  # what inject_rag_context returned
@@ -364,7 +364,7 @@ def _old_coder_inline(task, *, rag_result):
 
 
 def _old_research_inline(task):
-    """Reproduce agent_research.py:185-197 (pre-M6) exactly."""
+    """Reproduce agent_research.py's old inline context rendering exactly."""
     from shared.task_io import safe_read_context
 
     user_message = task["body"]
@@ -381,7 +381,7 @@ def _old_research_inline(task):
 
 
 def _old_claude_code_inline(task):
-    """Reproduce agent_claude_code.py:87-96 (pre-M6) exactly."""
+    """Reproduce agent_claude_code.py's old inline context rendering exactly."""
     from shared.task_io import safe_read_context
 
     user_message = task["body"]

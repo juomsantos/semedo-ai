@@ -51,10 +51,21 @@ class OllamaAPILogger:
         serialized = self._serialize_response(response)
         self._write_entry("response", serialized, session_id)
 
-    def log_stream_chunk(self, chunk: dict, session_id: Optional[str] = None):
-        """Log a streaming chunk from Ollama."""
-        serialized = self._serialize_response(chunk)
-        self._write_entry("stream_chunk", serialized, session_id)
+    def log_stream_response(self, content: str, thinking: str, tool_calls: list,
+                            session_id: Optional[str] = None):
+        """Log the aggregated result of one streamed turn as a single entry.
+
+        Streaming previously wrote one line per chunk (often hundreds per call),
+        which bloated ``ollama_api.jsonl`` and forced the reader and the UI to
+        reassemble the chunks. Instead, ``agent_chat`` accumulates the turn's
+        content / thinking / tool_calls and writes them here as one ``response``
+        entry — the same shape the non-streaming path logs, so the dashboard
+        renders it identically with no chunk reassembly.
+        """
+        payload = {"content": content, "tool_calls": tool_calls or [], "streamed": True}
+        if thinking:
+            payload["thinking"] = thinking
+        self._write_entry("response", payload, session_id)
 
     def log_error(self, error: str, context: dict, session_id: Optional[str] = None):
         """Log an error from Ollama."""
@@ -105,13 +116,11 @@ class OllamaAPILogger:
     def read_logs(self, limit: int = 100, session_id: Optional[str] = None) -> list:
         """Read recent log entries, optionally filtered by session.
 
-        ``limit`` counts logical request *groups* (one LLM call and all of its
-        chunk/response/error entries), not raw lines. A single streaming call
-        writes one line per chunk via ``log_stream_chunk`` — often hundreds —
-        so a raw line-count tail would let one response's chunks evict the
-        ``request`` line that started it and every earlier call from the
-        window, leaving the UI with orphaned chunks and no originating request.
-        Grouping first keeps each call intact.
+        ``limit`` counts logical request *groups* (one LLM call and its
+        response/error entries), not raw lines, so a multi-entry call is never
+        split across the tail boundary. Each streamed turn is now logged as a
+        single aggregated ``response`` entry (see ``log_stream_response``), so a
+        group is just a ``request`` plus its ``response`` / ``error``.
         """
         if not self.log_file.exists():
             return []

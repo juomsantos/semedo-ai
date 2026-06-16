@@ -1,20 +1,23 @@
 """
-agent_orchestrator.py — Orchestrator agent (qwen3:9b).
+agent_orchestrator.py — Orchestrator agent.
 
-CRON: */1 * * * * /usr/bin/python3 /path/to/scripts/agent_orchestrator.py
+Invocation: run by scripts/scheduler.py — triggered immediately by the inbox/
+file watcher when a task arrives (and on the scheduler's periodic interval if
+timer polling is enabled; it is disabled by default). The model is read from
+config.json (agents.orchestrator.model) — see that file for the actual model.
 
 Responsibilities:
   1. Poll inbox/ for pending .task.md files
-  2. For each task, call qwen3:9b to:
+  2. For each task, call the orchestrator model to:
      a. Decide if task should be decomposed into subtasks
      b. Route each (sub)task to the correct worker agent
   3. Write subtasks to agents/<worker>/inbox/
   4. Move original task to processing/ (then outbox/ when all subtasks complete)
   5. Log all decisions to logs/orchestrator/
 
-Worker agents available:
-  - coder       → agents/coder/inbox/        (qwen2.5-coder:7b)
-  - research     → agents/research/inbox/     (qwen3:9b)
+Worker agents available (models configured per-agent in config.json):
+  - coder       → agents/coder/inbox/        (local Ollama model)
+  - research     → agents/research/inbox/     (local Ollama model)
   - claude-code  → agents/claude-code/inbox/  (claude CLI)
 
 Routing rules (enforced via system prompt, not hardcoded):
@@ -193,7 +196,7 @@ def main():
             process_task(task, client, log)
         except OllamaError as e:
             # process_task catches OllamaError internally today, but the outer
-            # guard preserves the M3 pattern in case that ever changes.
+            # guard preserves the error-handling pattern in case that ever changes.
             log.error(f"Ollama error processing {task_path.name}: {e}")
         except Exception as e:
             log.error(f"Unhandled error processing {task_path.name}: {e}")

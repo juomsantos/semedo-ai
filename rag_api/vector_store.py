@@ -1,10 +1,18 @@
 """ChromaDB persistent client wrapper for vector storage."""
 
+import logging
 import chromadb
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ollama_client import OllamaClient
+
+logger = logging.getLogger(__name__)
+
+# Dimensionality of the configured embedding model (qwen3-embedding:8b). Used
+# only for the zero-vector fallback when embedding fails; a real embedding
+# defines its own length.
+_FALLBACK_EMBED_DIM = 4096
 
 
 class ChromaDBPersistentClient:
@@ -42,9 +50,13 @@ class ChromaDBPersistentClient:
     def _embed_content(self, content: str) -> List[float]:
         """Embed content using the injected OllamaClient.
 
-        Falls back to a zero vector if embedding fails, so ingestion/query
-        never hard-crashes (though retrieval quality will be zero for that chunk).
+        On failure, falls back to a zero vector so ingestion/query never
+        hard-crash — but logs a WARNING first. A zero-vector chunk is effectively
+        invisible to cosine retrieval (it silently degrades KB quality), so the
+        fallback must be observable: a run of these warnings means the embedding
+        model / Ollama server is unreachable or returning empty results.
         """
+        preview = content[:80].replace("\n", " ")
         try:
             if self._ollama_client is not None:
                 embedding = self._ollama_client.embed(content)
@@ -52,9 +64,23 @@ class ChromaDBPersistentClient:
                 # Fallback: import and create a client with default settings
                 from ollama_client import OllamaClient
                 embedding = OllamaClient().embed(content)
-            return embedding if embedding else [0.0] * 4096
-        except Exception:
-            return [0.0] * 4096
+        except Exception as e:
+            logger.warning(
+                "Embedding call failed — falling back to a zero vector; this chunk "
+                "will be unretrievable. content[%d chars]=%r — %s: %s",
+                len(content), preview, type(e).__name__, e,
+            )
+            return [0.0] * _FALLBACK_EMBED_DIM
+
+        if not embedding:
+            logger.warning(
+                "Embedding returned empty — falling back to a zero vector; this chunk "
+                "will be unretrievable. content[%d chars]=%r",
+                len(content), preview,
+            )
+            return [0.0] * _FALLBACK_EMBED_DIM
+
+        return embedding
 
     # ------------------------------------------------------------------
     # Write

@@ -1,4 +1,7 @@
 -r requirements.txt
+# Dashboard deps (Flask + Flask-Cors + Werkzeug) — needed so tests/test_dashboard_token.py
+# can import dashboard/app.py out of the box. Chains the root requirements too.
+-r dashboard/requirements.txt
 
 # Test runner + coverage
 pytest>=8.0.0
