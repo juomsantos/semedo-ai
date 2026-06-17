@@ -18,6 +18,27 @@ Usage:
 
 import ollama as _ollama
 
+# Cap the size of web content fed back into the model. web_fetch returns the FULL
+# page body and web_search can return many snippets; left unbounded, a single
+# large page can overflow the model's context window — a 32k-token context once
+# saw an 86k-token prompt and Ollama returned a 400 exceed_context_size error.
+# These caps bound any single tool result. Sized in characters (~4 chars/token):
+# 8000 chars ≈ ~2k tokens per fetched page, leaving room for several tool calls
+# plus the system prompt and task within a 32k window.
+MAX_FETCH_CONTENT_CHARS = 8000
+MAX_SEARCH_RESULT_CHARS = 1200   # per individual search result snippet
+MAX_SEARCH_TOTAL_CHARS = 6000    # backstop on a whole web_search() return (many results)
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Return ``text`` capped at ``limit`` chars with an explicit truncation marker."""
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    dropped = len(text) - limit
+    return text[:limit] + f"\n\n[... truncated {dropped} characters to fit the model context window ...]"
+
 
 def web_search(query: str, max_results: int = 5) -> str:
     """
@@ -52,15 +73,15 @@ def web_search(query: str, max_results: int = 5) -> str:
         url     = getattr(r, "url",     None) or (r.get("url",     "")           if isinstance(r, dict) else "")
         content = getattr(r, "content", None) or (r.get("content", "")           if isinstance(r, dict) else "")
         if content:
-            content = content.strip()
-        lines.append(f"## {i}. {title}")
+            content = _truncate(content.strip(), MAX_SEARCH_RESULT_CHARS)
+        lines.append(f"## {i}. {title}")  # noqa: keep result layout
         if url:
             lines.append(f"URL: {url}")
         if content:
             lines.append(content)
         lines.append("")
 
-    return "\n".join(lines)
+    return _truncate("\n".join(lines), MAX_SEARCH_TOTAL_CHARS)
 
 
 def web_fetch(url: str) -> str:
@@ -82,7 +103,7 @@ def web_fetch(url: str) -> str:
         title   = getattr(response, "title",   None) or (response.get("title",   "(no title)") if isinstance(response, dict) else "(no title)")
         content = getattr(response, "content", None) or (response.get("content", "")           if isinstance(response, dict) else "")
         if content:
-            content = content.strip()
+            content = _truncate(content.strip(), MAX_FETCH_CONTENT_CHARS)
     except Exception as e:
         return f"ERROR: Web fetch failed — {e}"
 
