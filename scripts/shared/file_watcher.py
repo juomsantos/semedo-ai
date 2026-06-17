@@ -118,3 +118,16 @@ class _TaskCreatedHandler(FileSystemEventHandler):
         """Triggered when a file is modified."""
         if not event.is_directory and event.src_path.endswith(".task.md"):
             self.on_task_created(self.folder_path)
+
+    def on_moved(self, event):
+        """Triggered when a file is renamed/moved into the folder.
+
+        Atomic task-file writes (shared.task_io._atomic_write_text) create a
+        temp file and then os.replace() it into place. On Windows that rename
+        surfaces as a FileMovedEvent whose dest_path is the final .task.md —
+        never an on_created/on_modified for the .task.md itself. Without this
+        handler, atomically-written tasks land on disk but never trigger the
+        agent, stalling the whole pipeline.
+        """
+        if not event.is_directory and str(event.dest_path).endswith(".task.md"):
+            self.on_task_created(self.folder_path)
