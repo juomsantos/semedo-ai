@@ -393,12 +393,25 @@ class TaskMonitor:
             file_mtime = datetime.fromtimestamp(task_file.stat().st_mtime, tz=timezone.utc)
             age_seconds = (datetime.now(timezone.utc) - file_mtime).total_seconds()
 
+            # Normalise created_at to a string. yaml.safe_load parses an UNQUOTED
+            # ISO timestamp (e.g. file-dropped tasks: `created_at: 2026-06-17T10:55:00`)
+            # into a datetime object, while a QUOTED value stays a str. If both
+            # styles coexist in the pipeline, sorting task dicts by created_at in
+            # get_all_tasks() raises "TypeError: '<' not supported between
+            # instances of 'datetime.datetime' and 'str'", which 500s /api/tasks
+            # and leaves the History tab blank. Coerce to a comparable ISO string.
+            created_at = metadata.get("created_at", "")
+            if hasattr(created_at, "isoformat"):  # datetime/date from yaml.safe_load
+                created_at = created_at.isoformat()
+            else:
+                created_at = str(created_at or "")
+
             return {
                 "id": task_id,
                 "type": metadata.get("type", "unknown"),
                 "priority": metadata.get("priority", "medium"),
                 "created_by": metadata.get("created_by", "unknown"),
-                "created_at": metadata.get("created_at", ""),
+                "created_at": created_at,
                 "assigned_to": assigned_to or metadata.get("assigned_to", "unknown"),
                 "status": status,
                 "location": location,

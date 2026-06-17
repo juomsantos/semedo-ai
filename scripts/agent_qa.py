@@ -400,8 +400,12 @@ Please review the latest code (and prior work context if provided) to determine 
             return {"verdict": "FAIL", "feedback": f"QA review was unclear: {response[:200]}"}
 
     except OllamaError as e:
-        log.error(f"Ollama error during QA review: {e}")
-        return {"verdict": "FAIL", "feedback": f"QA review failed: {str(e)}"}
+        # Infrastructure failure in QA's OWN LLM call (e.g. Ollama down, CUDA error).
+        # This is NOT a code-quality verdict — the code under review never failed,
+        # QA simply couldn't run. Return a distinct ERROR verdict so the caller does
+        # not treat it as a FAIL and spawn a coder retry. See process_task.
+        log.error(f"Ollama error during QA review (infrastructure, not a code verdict): {e}")
+        return {"verdict": "ERROR", "feedback": f"QA review could not run (Ollama error): {str(e)}"}
 
 
 def handle_failure(task: dict, feedback: str, full_result: str, language: str, execution, log: AgentLogger):
@@ -618,6 +622,19 @@ This code is ready for production.
         write_result(output_path, qa_result, meta={"task_id": task_id, "agent": AGENT_NAME, "verdict": "PASS"})
         mark_awaiting_validation(task_path)
         log.info(f"Task {task_id} passed QA → {output_path} (awaiting validation)")
+    elif review["verdict"] == "ERROR":
+        # QA's own LLM call failed (infrastructure, e.g. Ollama/CUDA) — NOT a code
+        # verdict. Do NOT call handle_failure (which would spawn a coder retry as if
+        # the code failed) and do NOT mark_awaiting_validation (no review happened).
+        # Mark the task failed so the orchestrator's recover_stalled_subtasks()
+        # re-dispatches this QA task (up to stall_retry_count) once Ollama recovers,
+        # then escalates the parent to failed/. This stops an infra blip from
+        # masquerading as a code-quality failure.
+        log.error(
+            f"Task {task_id} QA review could not run (infrastructure): {review['feedback']} "
+            f"— marking failed for orchestrator-managed retry (no coder retry)"
+        )
+        mark_failed(task_path)
     else:
         handle_failure(task, review["feedback"], result_content, language, execution, log)
         mark_awaiting_validation(task_path)

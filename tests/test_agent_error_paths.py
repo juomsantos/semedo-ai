@@ -8,8 +8,10 @@ observable outcome:
 
   * coder / research move the task to ``failed/`` when the Ollama call raises
     ``OllamaError`` (no exception escapes ``process_task``);
-  * QA's ``review_with_llm`` maps an ``OllamaError`` and an empty model
-    response to a ``FAIL`` verdict, and parses explicit PASS / FAIL verdicts.
+  * QA's ``review_with_llm`` maps an ``OllamaError`` to a distinct ``ERROR``
+    verdict (infrastructure failure, not a code verdict — no coder retry),
+    maps an empty model response to ``FAIL``, and parses explicit PASS / FAIL
+    verdicts.
 
 The LLM is replaced with tiny stub clients — no network, no real Ollama.
 """
@@ -147,11 +149,16 @@ def test_research_marks_task_failed_on_ollama_error(fake_project, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_qa_review_returns_fail_on_ollama_error(qa):
+def test_qa_review_returns_error_on_ollama_error(qa):
+    # An OllamaError is an INFRASTRUCTURE failure of QA's own LLM call, not a
+    # code-quality verdict. It must map to a distinct ERROR verdict so the caller
+    # marks the task failed (orchestrator-managed retry) rather than spawning a
+    # coder retry as if the code under review had failed.
     review = qa.review_with_llm(
         "the task", "the code", qa._NOT_EXECUTED, [], _RaisingClient(), _Log(), "t1"
     )
-    assert review["verdict"] == "FAIL"
+    assert review["verdict"] == "ERROR"
+    assert review["verdict"] != "FAIL"
 
 
 def test_qa_review_returns_pass_on_pass_verdict(qa):
